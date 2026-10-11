@@ -7,6 +7,11 @@ limusic.31-220-104-125.sslip.io {
 	handle /ws {
 		reverse_proxy 127.0.0.1:8900
 	}
+	# Audio/video stream bytes (crates/server/src/media.rs) — without this, these fall through
+	# to the SPA catch-all below and the player silently receives index.html instead of audio.
+	handle /media/* {
+		reverse_proxy 127.0.0.1:8900
+	}
 	handle {
 		root * /srv/limusic/web
 		try_files {path} /index.html

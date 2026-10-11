@@ -139,7 +139,12 @@
 		"history": "History",
 		"no_channels": "YouTube did not return any selectable channels.",
 		"sign_in_cookie_label": "Paste your YouTube Music cookie",
-		"sign_in_cookie_placeholder": "Cookie: VISITOR_INFO1_LIVE=...; SAPISID=...; ..."
+		"sign_in_cookie_placeholder": "Cookie: VISITOR_INFO1_LIVE=...; SAPISID=...; ...",
+		"sign_in_cookie_help_toggle": "How do I get this?",
+		"sign_in_cookie_step1": "Open music.youtube.com, signed in, then open DevTools (F12 or Cmd+Opt+I) → the Network tab.",
+		"sign_in_cookie_step2": "Reload the page, then click a request to music.youtube.com itself — not an image, script, or style file.",
+		"sign_in_cookie_step3": "Open Headers → Request Headers (not Response Headers), and find the line starting \"Cookie:\".",
+		"sign_in_cookie_step4": "Copy everything after \"Cookie: \" and paste it below."
 	},
 	"player": {
 		"play": "Play",

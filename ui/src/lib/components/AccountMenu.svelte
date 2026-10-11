@@ -285,6 +285,17 @@
 				<label class="mt-3 block text-xs font-medium" for="account-menu-cookie">
 					{t('nav.sign_in_cookie_label')}
 				</label>
+				<details class="mt-1 text-xs text-muted-foreground">
+					<summary class="cursor-pointer select-none text-primary">
+						{t('nav.sign_in_cookie_help_toggle')}
+					</summary>
+					<ol class="mt-1.5 list-decimal space-y-1 pl-4">
+						<li>{t('nav.sign_in_cookie_step1')}</li>
+						<li>{t('nav.sign_in_cookie_step2')}</li>
+						<li>{t('nav.sign_in_cookie_step3')}</li>
+						<li>{t('nav.sign_in_cookie_step4')}</li>
+					</ol>
+				</details>
 				<textarea
 					id="account-menu-cookie"
 					bind:value={cookieInput}

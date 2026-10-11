@@ -1,0 +1,27 @@
+[package]
+name = "server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Limusic HTTP server — the start of the self-hosted (non-Tauri) backend"
+
+[[bin]]
+name = "limusic-server"
+path = "src/main.rs"
+
+[dependencies]
+innertube = { path = "../innertube" }
+# Neither the package nor this dependency key can be named "core": that collides with Rust's own
+# built-in `core` crate at the extern-prelude level (not just the package registry) —
+# `#[tokio::main]`'s expansion assumes `core::` resolves to the standard library, and breaks the
+# moment anything else claims that name, package rename or not.
+limusic_core = { path = "../core", package = "limusic-core" }
+axum = { version = "0.8", features = ["ws"] }
+tokio = { workspace = true, features = ["net", "signal"] }
+tokio-stream = "0.1"
+tower-http = { version = "0.6", features = ["cors"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rand = { workspace = true }

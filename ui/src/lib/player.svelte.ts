@@ -19,6 +19,8 @@ import type { Personal } from './personal';
 import { appearance } from './theme.svelte';
 import { currentLocale, pushLocaleToRust, t } from './i18n.svelte';
 import { friendlyNetError } from './neterr';
+import { isTauri } from './platform';
+import * as webPlayback from './web-playback.svelte';
 
 export const playback = $state({
 	now: null as NowPlaying | null,
@@ -92,8 +94,15 @@ export function wantedVideoHeight() {
 	return [360, 480, 720].find((h) => h >= px) ?? 720;
 }
 
-/** The loopback URL for a track's music video, resolving it at most once. */
+/** The loopback URL for a track's music video, resolving it at most once.
+ *
+ *  Web build: there is no separate per-call proxy lookup (`api.videoStream` stays permanently
+ *  unsupported there, see api.web.ts) — `/api/playback/resolve` already resolved video alongside
+ *  audio when the track started playing, so this just reads that result back. */
 export function videoUrlFor(videoId: string): Promise<string | null> {
+	if (!isTauri) {
+		return Promise.resolve(playback.now?.videoId === videoId ? webPlayback.currentVideoUrl() : null);
+	}
 	let p = videoUrls.get(videoId);
 	if (!p) {
 		// Silent on failure: a null answer is the ordinary case (the track has no video stream),
@@ -1438,6 +1447,54 @@ export function notePlaylistAdd(playlistId: string, songs: SongItem[]) {
 }
 
 let started = false;
+let startedWeb = false;
+
+/**
+ * The browser/PWA build's counterpart to `initApp` below (openspec/changes/signed-in-http-parity,
+ * task 13.1) — same account/library/blocked/Listen-Together wiring, minus everything that only
+ * makes sense with a local player: no queue/now-playing/position/volume subscriptions (nothing
+ * emits them yet, Phase 3), no `scanLocal`/`getSettings`-driven prefs (desktop folders and
+ * mpv/Discord/ambient-light toggles), no locale push to a Rust backend that isn't there.
+ */
+export function initWebApp(): () => void {
+	if (startedWeb) return () => {};
+	startedWeb = true;
+	const subs = [
+		api.onAuthChanged((a) => {
+			auth.account = a;
+			resetLibraryForAccount();
+			loadLibrary(true);
+			loadSavedIndex();
+			if (!a.signedIn) {
+				ui.channelPickerOpen = false;
+				ui.channelPickerRequired = false;
+				ui.channelIdentities = [];
+			}
+			clearCached();
+			auth.epoch++;
+		}),
+		api.onAccountSelectionRequired(() => openChannelPicker(true)),
+		api.onLoginError((msg) => toast.error(msg)),
+		api.onLoginDone(() => toast.success(t('toasts.signed_in'))),
+		api.onLtState(applyLtState),
+		api.onLtNotice((msg) => toast(msg))
+	];
+	const teardown = () => subs.forEach((u) => u.then((f) => f()));
+	api.getAccount()
+		.then((a) => {
+			auth.account = a;
+			if (a.signedIn && a.selectionRequired) {
+				openChannelPicker(true);
+				return;
+			}
+			loadLibrary();
+			loadSavedIndex();
+		})
+		.catch(() => {});
+	loadBlocked();
+	api.ltGetState().then(applyLtState).catch(() => {});
+	return teardown;
+}
 
 /**
  * Wire the Tauri event listeners once and seed initial state. Returns a teardown fn.

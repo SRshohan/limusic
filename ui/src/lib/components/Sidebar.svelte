@@ -15,17 +15,24 @@
 		ListRestartIcon,
 		ComputerIcon,
 		SquareArrowLeft01Icon,
-		SquareArrowRight01Icon
+		SquareArrowRight01Icon,
+		UserGroup02Icon
 	} from '@hugeicons/core-free-icons';
 	import { toggleMode } from 'mode-watcher';
 	import { Button } from '$lib/components/ui/button';
 	import { ON_REPEAT_ID, isLocalPlaylist, type BrowseItem } from '$lib/api';
 	import { thumb } from '$lib/thumb';
 	import PlaylistMenu from './PlaylistMenu.svelte';
+	import AccountMenu from './AccountMenu.svelte';
 	import { library, personal, ui, openNewPlaylist, toggleSidebar } from '$lib/player.svelte';
 	import { mergeSaved, orderLibrary } from '$lib/personal';
 	import { t } from '$lib/i18n.svelte';
+	import { isTauri } from '$lib/platform';
+	import { lt } from '$lib/lt.svelte';
 
+	// Also mounted in the browser/PWA build (see +layout.svelte's `!isTauri` branch,
+	// signed-in-http-parity task 13.1) — no Tauri-only API call here is allowed to be unconditional
+	// (task 13.2) so that still renders cleanly with no Tauri runtime present.
 	const nav = $derived([
 		{ href: '/', label: t('nav.home'), icon: Home01Icon },
 		{ href: '/search', label: t('nav.search'), icon: Search01Icon },
@@ -107,6 +114,14 @@
 		</div>
 	</div>
 
+	<!-- Web only: desktop's account control lives in the Titlebar (never mounted here), so this is
+	     the one place it's reachable from the web build. -->
+	{#if !isTauri}
+		<div class="border-b pb-2">
+			<AccountMenu />
+		</div>
+	{/if}
+
 	<nav class="mt-2 flex flex-col gap-1">
 		{#each nav as n (n.href)}
 			<a
@@ -131,19 +146,41 @@
 				<span class="hidden {wide('lg:inline')}">{n.label}</span>
 			</a>
 		{/each}
-		<button
-			onclick={() => (ui.settingsOpen = true)}
-			title={t('nav.settings')}
-			class="group flex items-center justify-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-foreground {wide(
-				'lg:justify-start'
-			)}"
-		>
-			<HugeiconsIcon
-				icon={Settings01Icon}
-				class="h-5 w-5 shrink-0"
-			/>
-			<span class="hidden {wide('lg:inline')}">{t('nav.settings')}</span>
-		</button>
+		<!-- The web build has no Titlebar (desktop-only chrome), so this is its one entry point to
+		     the Listen Together dialog (http-audio-streaming task 7.2 — the room/host UI already
+		     worked from signed-in-http-parity, this task is what gives a host something to
+		     broadcast). Desktop keeps using its own Titlebar button; no need to duplicate it here. -->
+		{#if !isTauri}
+			<button
+				onclick={() => (ui.ltOpen = true)}
+				title={t('nav.listen_together')}
+				class="group flex items-center justify-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors {wide(
+					'lg:justify-start'
+				)} {lt.role !== 'none' ? 'text-primary' : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground'}"
+			>
+				<HugeiconsIcon icon={UserGroup02Icon} class="h-5 w-5 shrink-0" />
+				<span class="hidden {wide('lg:inline')}">{t('nav.listen_together')}</span>
+			</button>
+		{/if}
+		<!-- `SettingsDialog` isn't mounted outside Tauri yet (signed-in-http-parity task 13.1's
+		     note: it unconditionally imports `@tauri-apps/plugin-dialog`/`getVersion`, which needs
+		     its own audit before it can run in a plain browser) — hide the entry point rather than
+		     leave a button that silently does nothing when clicked. -->
+		{#if isTauri}
+			<button
+				onclick={() => (ui.settingsOpen = true)}
+				title={t('nav.settings')}
+				class="group flex items-center justify-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-foreground {wide(
+					'lg:justify-start'
+				)}"
+			>
+				<HugeiconsIcon
+					icon={Settings01Icon}
+					class="h-5 w-5 shrink-0"
+				/>
+				<span class="hidden {wide('lg:inline')}">{t('nav.settings')}</span>
+			</button>
+		{/if}
 	</nav>
 
 	<!-- Playlists. Hidden on the icon rail (needs labels; matches YTM's collapsed rail). flex-1 lets

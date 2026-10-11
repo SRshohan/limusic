@@ -14,8 +14,8 @@ auto-merges the platform file over the base for the current OS.
 
 - **Rust** (stable, via rustup) and the Tauri CLI: `cargo install tauri-cli --version "^2"`.
 - **Node + pnpm**, then install the UI deps once: `cd ui && pnpm install`.
-- Build command everywhere: `cd ui && pnpm build` then `cargo tauri build` (the config's
-  `beforeBuildCommand` also runs `pnpm build`, but running it first makes failures obvious).
+- Build command everywhere: `cd ui && pnpm build:tauri` then `cargo tauri build` (the config's
+  `beforeBuildCommand` also runs `pnpm build:tauri`, but running it first makes failures obvious).
 
 ---
 
@@ -25,7 +25,7 @@ auto-merges the platform file over the base for the current OS.
 ```bash
 sudo dnf install mpv-libs mpv-libs-devel webkit2gtk4.1-devel \
   gcc gcc-c++ make openssl-devel librsvg2-devel   # + standard Tauri build deps
-cd ui && pnpm install && pnpm build
+cd ui && pnpm install && pnpm build:tauri
 cargo tauri build            # → target/release/bundle/rpm/limusic-*.rpm (plus a test-only .deb)
 ```
 
@@ -33,7 +33,7 @@ cargo tauri build            # → target/release/bundle/rpm/limusic-*.rpm (plus
 ```bash
 sudo apt install libmpv-dev libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
   libssl-dev libdbus-1-dev
-cd ui && pnpm install && pnpm build
+cd ui && pnpm install && pnpm build:tauri
 cargo tauri build --bundles deb   # → target/release/bundle/deb/limusic_*.deb
 ```
 
@@ -95,7 +95,7 @@ cargo tauri build --bundles deb   # → target/release/bundle/deb/limusic_*.deb
    It's ~117 MB — gitignored, never commit it.
 6. **Build:**
    ```powershell
-   cd ui; pnpm build; cd ..
+   cd ui; pnpm build:tauri; cd ..
    cargo tauri build          # → target/release/bundle/{msi,nsis}/limusic_*.{msi,exe}
    ```
 - Media keys use **SMTC** (the volume-flyout media card). souvlaki binds it to the main window
@@ -119,7 +119,7 @@ cargo tauri build --bundles deb   # → target/release/bundle/deb/limusic_*.deb
    ```
 4. **Build:**
    ```bash
-   cd ui && pnpm build && cd ..
+   cd ui && pnpm build:tauri && cd ..
    cargo tauri build          # → target/release/bundle/{macos,dmg}/limusic.{app,dmg}
    ```
 5. **Bundle the dylibs, all of them.** What comes out of step 4 runs on *your* machine

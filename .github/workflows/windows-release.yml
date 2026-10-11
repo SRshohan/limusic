@@ -273,7 +273,7 @@ jobs:
           fi
 
           echo "building with RUSTFLAGS=${RUSTFLAGS:-<unset>}"
-          (cd ui && pnpm build)
+          (cd ui && pnpm build:tauri)
           # beforeBuildCommand emptied: we just ran it. Left on, tauri runs `pnpm build` from the
           # repo root, which has no package.json, so pnpm's choice between ui/ and website/ is down
           # to the filesystem — it resolves to ui here and to website on Linux. Working by accident.

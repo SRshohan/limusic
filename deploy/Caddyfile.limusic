@@ -1,0 +1,15 @@
+# Reference snippet appended to this VPS's system Caddyfile (/etc/caddy/Caddyfile) alongside its
+# other sites. Not loaded automatically — Caddy only reads /etc/caddy/Caddyfile.
+limusic.31-220-104-125.sslip.io {
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8900
+	}
+	handle /ws {
+		reverse_proxy 127.0.0.1:8900
+	}
+	handle {
+		root * /srv/limusic/web
+		try_files {path} /index.html
+		file_server
+	}
+}

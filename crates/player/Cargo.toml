@@ -17,5 +17,8 @@ libc = "0.2"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+[build-dependencies]
+pkg-config = "0.3"
+
 [[example]]
 name = "play"

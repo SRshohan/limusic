@@ -1,6 +1,7 @@
 /target
 .mcp.json
 .idea/
+/.obsidian/
 # rustypipe scratch (older builds wrote these into CWD; now redirected to temp)
 rustypipe_cache.json
 rustypipe_reports/
@@ -15,6 +16,13 @@ rustypipe_reports/
 
 # Last.fm API credentials — read by src-tauri/build.rs, never committed (public repo).
 /src-tauri/lastfm.keys
+
+# crates/server's local dev/session database — holds a real signed-in YouTube session once
+# someone signs in (public repo, never committed).
+/limusic-server.sqlite
+/limusic-server.sqlite-shm
+/limusic-server.sqlite-wal
+/limusic-server-data/
 
 # Local design notes & tooling — kept out of the public repo
 /context/

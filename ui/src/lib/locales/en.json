@@ -101,7 +101,8 @@
 		"shuffle_all": "Shuffle all",
 		"play_all": "Play all",
 		"top_result": "Top result",
-		"all_results_for": "All results for “{query}”"
+		"all_results_for": "All results for “{query}”",
+		"sign_in": "Sign in"
 	},
 	"search": {
 		"recent": "Recent searches",
@@ -136,7 +137,9 @@
 		"remove_account_desc": "{name} is only removed from this list. The Google account itself is not affected, and you can sign in with it again whenever you like.",
 		"saved_accounts_hint": "Pick a saved account to switch to it.",
 		"history": "History",
-		"no_channels": "YouTube did not return any selectable channels."
+		"no_channels": "YouTube did not return any selectable channels.",
+		"sign_in_cookie_label": "Paste your YouTube Music cookie",
+		"sign_in_cookie_placeholder": "Cookie: VISITOR_INFO1_LIVE=...; SAPISID=...; ..."
 	},
 	"player": {
 		"play": "Play",

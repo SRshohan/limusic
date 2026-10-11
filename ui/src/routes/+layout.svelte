@@ -23,6 +23,8 @@
 		initTheme
 	} from '$lib/theme.svelte';
 	import { loadAppIcon } from '$lib/appicon.svelte';
+	import { isTauri } from '$lib/platform';
+	import PwaUpdatePrompt from '$lib/components/PwaUpdatePrompt.svelte';
 	import { thumb } from '$lib/thumb';
 	import { t } from '$lib/i18n.svelte';
 	import { blockForeignDrag, dragScroll } from '$lib/dnd';
@@ -47,7 +49,7 @@
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
 	import KeyboardShortcuts from '$lib/components/KeyboardShortcuts.svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { auth, initApp, np, playback, prefs, ui } from '$lib/player.svelte';
+	import { auth, initApp, initWebApp, np, playback, prefs, ui } from '$lib/player.svelte';
 	import { video } from '$lib/video.svelte';
 	import { win, initWin } from '$lib/win.svelte';
 	import { initZoom } from '$lib/zoom.svelte';
@@ -175,13 +177,16 @@
 
 	// The mini player runs this same SPA in a second window (Rust `mini.rs`), so the window label is
 	// what tells the two apart: `mini` gets the widget instead of the app chrome, and none of the
-	// routes below it are ever rendered. Constant for the window's lifetime.
-	const isMini = browser && getCurrentWindow().label === 'mini';
+	// routes below it are ever rendered. Constant for the window's lifetime. `isTauri &&` first:
+	// `getCurrentWindow()` touches `window.__TAURI_INTERNALS__` synchronously and throws outright
+	// when it's absent, which it always is in a plain browser tab (the PWA/offline path).
+	const isMini = isTauri && getCurrentWindow().label === 'mini';
 
 	// Apply the saved accent color before the first paint (ssr=false → nothing renders until now).
 	if (browser) initTheme();
-	// The custom app icon (#173) is a file on disk, so the titlebar has to ask Rust for it.
-	if (browser) loadAppIcon();
+	// The custom app icon (#173) is a file on disk, so the titlebar has to ask Rust for it — only
+	// meaningful (and only safe to call) inside the Tauri webview.
+	if (isTauri) loadAppIcon();
 
 	// Wire the Tauri event bridge once for the whole app; teardown on destroy. Check for an update
 	// on every app open (silent unless one exists).
@@ -197,6 +202,10 @@
 				teardownMiniKeys();
 			};
 		}
+		// A plain browser tab (the PWA/offline path): no native window to reveal, no updater plugin,
+		// no custom zoom — but account/library/Listen-Together state is real now
+		// (signed-in-http-parity), so it gets its own lighter init instead of Tauri's `initApp`.
+		if (!isTauri) return initWebApp();
 		// First: it reveals the window (see initWin).
 		const teardownWin = initWin();
 		checkForUpdatesQuiet();
@@ -232,6 +241,63 @@
      and no toasts (a banner would cover most of a 560x180 widget). -->
 {#if isMini}
 	<MiniPlayer />
+{:else if !isTauri}
+	<!-- Plain browser tab (the PWA path, never reached inside Tauri). The desktop-only window
+	     chrome (Titlebar/ResizeBorders, native-video-hole compositing, theater mode's Win32 half)
+	     stays out, but playback is real now (openspec/changes/http-audio-streaming) — Sidebar/nav
+	     (signed-in-http-parity task 13.1) plus the transport UI that goes with it. Scope boundary:
+	     AddToPlaylist/NewPlaylistDialog/ShareDialog/ChannelPicker/LinkDialog/CommandPalette/
+	     KeyboardShortcuts/SettingsDialog aren't wired here — out of this task's scope, not audited
+	     yet for Tauri-only calls. -->
+	<div class="relative flex h-screen flex-col text-foreground">
+		<div class="relative flex min-h-0 flex-1">
+			<Sidebar />
+			<main
+				class="min-w-0 flex-1 overflow-y-auto bg-background"
+				bind:this={scroller}
+			>
+				{#key `${auth.epoch}:${ui.epoch}`}
+					{@render children()}
+				{/key}
+			</main>
+			<VideoSurface />
+			{#if np.open && playback.now}<NowPlaying {queueOpen} {lyricsOpen} />{/if}
+			{#if lyricsOpen}<LyricsPanel onClose={() => (lyricsOpen = false)} {queueOpen} />{/if}
+			{#if queueOpen}<QueuePanel onClose={() => (queueOpen = false)} />{/if}
+		</div>
+		{#if playback.now}
+			<div class="relative z-20" in:fly={{ y: 64, duration: 250, easing: cubicOut }}>
+				<PlayerBar
+					onToggleQueue={() => (tabbed ? (np.tab = 'queue') : (queueOpen = !queueOpen))}
+					queueOpen={tabbed ? np.tab === 'queue' : queueOpen}
+					onToggleLyrics={() => (tabbed ? (np.tab = 'lyrics') : (lyricsOpen = !lyricsOpen))}
+					lyricsOpen={tabbed ? np.tab === 'lyrics' : lyricsOpen}
+				/>
+			</div>
+		{/if}
+	</div>
+	<ListenTogether />
+	<PwaUpdatePrompt />
+
+	{#if ui.toast}
+		{@const t = ui.toast}
+		<div
+			transition:fly={{ y: 16, duration: 220, easing: cubicOut }}
+			class="fixed bottom-6 left-1/2 z-[100] flex -translate-x-1/2 items-center gap-2 rounded-lg border bg-card px-4 py-2 text-sm shadow-lg"
+		>
+			{#if t.kind === 'success'}
+				<HugeiconsIcon icon={CheckmarkCircle02Icon} class="h-4 w-4 shrink-0 text-primary" />
+			{:else if t.kind === 'error'}
+				<HugeiconsIcon icon={AlertCircleIcon} class="h-4 w-4 shrink-0 text-destructive" />
+			{:else}
+				<HugeiconsIcon
+					icon={InformationCircleIcon}
+					class="h-4 w-4 shrink-0 text-muted-foreground"
+				/>
+			{/if}
+			{t.msg}
+		</div>
+	{/if}
 {:else}
 	<!-- The window itself is transparent; this root paints the background and, when not maximized,
 	     rounds the corners (the compositor can't round an undecorated window for us). Theater mode

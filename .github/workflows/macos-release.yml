@@ -211,7 +211,7 @@ jobs:
       - name: Build the app bundle
         run: |
           set -euo pipefail
-          (cd ui && pnpm build)
+          (cd ui && pnpm build:tauri)
           # beforeBuildCommand emptied because we just ran it. Left on, tauri runs `pnpm build` from
           # the repo root, which has no package.json, so which frontend package pnpm picks is down
           # to the filesystem.

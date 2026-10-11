@@ -1,0 +1,10 @@
+target
+ui/node_modules
+ui/web
+ui/build
+ui/.svelte-kit
+.git
+.obsidian
+limusic-server.sqlite*
+limusic-server-data
+src-tauri/target

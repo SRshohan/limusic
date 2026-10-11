@@ -248,7 +248,7 @@ jobs:
             echo "::error::TAURI_SIGNING_PRIVATE_KEY secret is not set — the build would produce an unsignable AppImage"
             exit 1
           fi
-          (cd ui && pnpm build)
+          (cd ui && pnpm build:tauri)
           # beforeBuildCommand is emptied because we just ran it, deterministically. Left on, tauri
           # runs `pnpm build` from the repo root — which has no package.json, so which of the two
           # frontend packages (ui/, website/) pnpm picks is up to the filesystem: Windows resolved

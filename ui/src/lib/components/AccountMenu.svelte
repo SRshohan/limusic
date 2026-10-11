@@ -20,11 +20,15 @@
 	import { thumb } from '$lib/thumb';
 	import { anchorMenu, fitMenu, NO_ANCHOR } from '$lib/menu';
 	import { t } from '$lib/i18n.svelte';
+	import { isTauri } from '$lib/platform';
 
 	let menuOpen = $state(false);
 	let anchor = $state(NO_ANCHOR);
 	let accounts = $state<api.SavedAccount[]>([]);
 	let busy = $state(false);
+	/** Web only — no login webview to host Google's in-app sign-in, so cookie-paste (already a
+	 *  documented, supported alternative) is the one browser login path. */
+	let cookieInput = $state('');
 	// The account the confirm dialog is asking about. Deliberately not cleared when the dialog
 	// closes, so its name doesn't blank out mid close-animation; `confirmOpen` is the real state.
 	let removing = $state<api.SavedAccount | null>(null);
@@ -62,6 +66,24 @@
 	function signInGoogle() {
 		api.loginWebview(); // native sign-in window takes over; result arrives via auth-changed
 		menuOpen = false;
+	}
+
+	/** Web's one login path (README-documented, already supported alongside the native webview on
+	 *  desktop) — the server mints its own session from the pasted cookie, never the cookie itself
+	 *  reused as a credential client-side. */
+	async function submitCookie() {
+		const cookie = cookieInput.trim();
+		if (!cookie || busy) return;
+		busy = true;
+		try {
+			await api.signInWithCookie(cookie);
+			cookieInput = '';
+			menuOpen = false;
+		} catch (e) {
+			toast.error(String(e));
+		} finally {
+			busy = false;
+		}
 	}
 
 	/**
@@ -222,11 +244,15 @@
 		{#if auth.account?.signedIn}
 			<!-- justify-start on all three: centred content puts each icon at a different x, because
 			     the labels are different widths. Left-aligned, the icons share a column and so do
-			     the labels, lining up with the saved-account rows above. -->
-			<Button variant="outline" size="sm" class="mb-2 w-full justify-start gap-2" onclick={addAccount}>
-				<HugeiconsIcon icon={Add01Icon} class="size-5 shrink-0" />
-				{t('nav.add_account')}
-			</Button>
+			     the labels, lining up with the saved-account rows above.
+			     Web: no login webview for `addAccount` to drive — sign out and cookie-paste the
+			     other account instead, so this stays Tauri-only rather than a dead button. -->
+			{#if isTauri}
+				<Button variant="outline" size="sm" class="mb-2 w-full justify-start gap-2" onclick={addAccount}>
+					<HugeiconsIcon icon={Add01Icon} class="size-5 shrink-0" />
+					{t('nav.add_account')}
+				</Button>
+			{/if}
 			<!-- Always offered, never gated on a stored "you have one channel": that answer comes from
 			     a single accounts_list call at sign-in, and when it fails the switcher used to vanish
 			     for good. The picker fetches the list live and shows its own error. -->
@@ -247,12 +273,34 @@
 			{:else}
 				<p class="text-xs text-muted-foreground">{t('nav.saved_accounts_hint')}</p>
 			{/if}
-			<!-- Signed out with saved accounts: the plain sign-in reuses the login webview's own
-			     Google session, which is the fast path back into whichever account it last held.
-			     Add account is the one that clears it first, so it is the way to reach a different
-			     one. Both are offered rather than guessing which the user meant. -->
-			<Button class="mt-3 w-full" onclick={signInGoogle}>{t('common.sign_in_google')}</Button>
-			{#if others.length > 0}
+			{#if isTauri}
+				<!-- Signed out with saved accounts: the plain sign-in reuses the login webview's own
+				     Google session, which is the fast path back into whichever account it last held.
+				     Add account is the one that clears it first, so it is the way to reach a different
+				     one. Both are offered rather than guessing which the user meant. -->
+				<Button class="mt-3 w-full" onclick={signInGoogle}>{t('common.sign_in_google')}</Button>
+			{:else}
+				<!-- Web: no login webview to host Google's in-app sign-in, so cookie-paste is the one
+				     browser login path (README-documented, already a supported desktop alternative). -->
+				<label class="mt-3 block text-xs font-medium" for="account-menu-cookie">
+					{t('nav.sign_in_cookie_label')}
+				</label>
+				<textarea
+					id="account-menu-cookie"
+					bind:value={cookieInput}
+					rows="3"
+					placeholder={t('nav.sign_in_cookie_placeholder')}
+					class="mt-1 w-full resize-none rounded-md border bg-background p-2 text-xs"
+				></textarea>
+				<Button
+					class="mt-2 w-full"
+					disabled={busy || !cookieInput.trim()}
+					onclick={submitCookie}
+				>
+					{t('common.sign_in')}
+				</Button>
+			{/if}
+			{#if isTauri && others.length > 0}
 				<Button variant="outline" size="sm" class="mt-2 w-full justify-start gap-2" onclick={addAccount}>
 					<HugeiconsIcon icon={Add01Icon} class="size-5 shrink-0" />
 					{t('nav.add_account')}

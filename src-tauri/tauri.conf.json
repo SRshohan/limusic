@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../ui/build",
     "devUrl": "http://localhost:5183",
-    "beforeDevCommand": "pnpm dev",
-    "beforeBuildCommand": "pnpm build"
+    "beforeDevCommand": { "script": "pnpm dev:tauri", "cwd": "../ui" },
+    "beforeBuildCommand": { "script": "pnpm build:tauri", "cwd": "../ui" }
   },
   "app": {
     "windows": [

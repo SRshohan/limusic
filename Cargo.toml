@@ -5,6 +5,8 @@ members = [
     "crates/player",
     "crates/listen-protocol",
     "crates/sync-server",
+    "crates/server",
+    "crates/core",
     "src-tauri",
 ]
 

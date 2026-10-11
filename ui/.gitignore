@@ -7,6 +7,10 @@ node_modules
 .wrangler
 /.svelte-kit
 /build
+# PWA/browser build output (pnpm build), kept separate from /build (the Tauri desktop embed)
+/web
+# vite-plugin-pwa dev-mode service worker output (devOptions.enabled)
+/dev-dist
 
 # OS
 .DS_Store

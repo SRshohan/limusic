@@ -208,6 +208,48 @@ Windows and macOS instructions live in [docs/BUILD-PLATFORMS.md](docs/BUILD-PLAT
 
 ---
 
+## Self-Hosting (Web/PWA)
+
+The browser/PWA build has no Tauri webview, so it can't do the in-app Google
+login. Instead it signs in by pasting your YouTube Music session cookie —
+the same cookie-paste method the desktop app already supports as an
+alternative to the Google webview login.
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+`docker-compose.yml` builds `crates/server` (the HTTP backend) and publishes
+it on `127.0.0.1:8900`; put a reverse proxy (Caddy, nginx, …) in front of it
+for TLS and to serve the built `ui/web` static files — see
+[deploy/Caddyfile.limusic](deploy/Caddyfile.limusic) for a worked example.
+Account/session data persists in the `limusic-data` Docker volume.
+
+### Getting your cookie
+
+1. Open **music.youtube.com** in a new tab, signed in, and open DevTools
+   (`F12` or `Cmd+Opt+I`) → the **Network** tab. Leave DevTools open.
+2. Reload the page (`Cmd+R` / `Ctrl+R`) so Network has fresh requests to show.
+3. Click any request to `music.youtube.com` itself in the list — e.g. the
+   first one, usually named `music.youtube.com` or `browse` — **not** a
+   request to a different host like `www.gstatic.com`, `i.ytimg.com`, or a
+   cached static asset (`base.js`, a `.css`/`.png` file). Those don't carry
+   your session cookie, and some show "Provisional headers are shown"
+   instead of the real request headers.
+4. In the panel that opens, go to **Headers** → **Request Headers** (not
+   *Response* Headers) and find the line starting `Cookie:`.
+5. Copy everything after `Cookie: ` (the whole value — it's long, with many
+   `name=value;` pairs separated by `;`). That's the string to paste into
+   Limusic's sign-in box (the account menu in the sidebar, web build only).
+
+The cookie is a live login credential — treat it like a password. Limusic's
+server stores it server-side behind an opaque session cookie of its own
+(never echoed back to the page or logged); paste it directly into the app's
+own sign-in UI, not into a chat, ticket, or anywhere else it would be logged.
+
+---
+
 ## How It Works, Briefly
 
 - A pure Rust crate speaks YouTube's InnerTube API, impersonating several

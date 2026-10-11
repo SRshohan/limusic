@@ -76,8 +76,11 @@
 	const wide = (cls: string) => (collapsed ? '' : cls);
 </script>
 
+<!-- Hidden below sm: a phone gets BottomNav instead (+layout.svelte, web build only) — a permanent
+     64px rail is too much of a phone's width to give up all the time, including over the
+     full-screen Now Playing view (#mobile-friendly audit). -->
 <aside
-	class="flex h-full w-16 shrink-0 flex-col border-r bg-sidebar p-3 text-sidebar-foreground {wide(
+	class="hidden h-full w-16 shrink-0 flex-col border-r bg-sidebar p-3 text-sidebar-foreground sm:flex {wide(
 		'lg:w-60'
 	)}"
 >

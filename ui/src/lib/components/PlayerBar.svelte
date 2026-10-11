@@ -138,8 +138,65 @@
 <footer
 	onpointerdown={(e) => (pressedControl = isControl(e.target))}
 	onclick={onBarClick}
-	class="flex items-center gap-2 border-t bg-card px-2 py-2.5 sm:gap-4 sm:px-4 sm:py-3"
+	class="relative border-t bg-card"
 >
+	<!-- Phone-width mini-player: the full desktop layout below has 9+ icons plus a seek bar packed
+	     into 3 flex columns, which only works once there's room for all of them (sm+) — below that
+	     their min-width:auto (no min-w-0 on those columns) squeezes the title column to nothing
+	     instead (#mobile-friendly audit). This row trades every secondary control (shuffle, repeat,
+	     volume, like, add, lyrics, queue) for just play/pause + next; everything else lives in the
+	     full Now Playing view a tap on the bar already opens. -->
+	<div class="flex items-center gap-3 px-3 py-2 sm:hidden" data-ctx>
+		{#key playback.now?.videoId}
+			{#if playback.now?.thumbnail}
+				<img
+					src={thumb(playback.now.thumbnail, 120)}
+					alt=""
+					style="max-width:none"
+					class="h-10 w-10 shrink-0 rounded-lg object-cover"
+					in:fade={{ duration: 250 }}
+				/>
+			{:else}
+				<div
+					class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground/50"
+				>
+					<HugeiconsIcon icon={MusicNote01Icon} class="h-4 w-4" />
+				</div>
+			{/if}
+		{/key}
+		<div class="min-w-0 flex-1">
+			<Marquee
+				text={playback.now?.title ?? t('player.not_playing')}
+				class="text-sm font-medium"
+			/>
+			<ArtistLine
+				runs={playback.now?.artistRuns}
+				text={playback.now?.artists ?? ''}
+				marquee
+				class="block max-w-full text-xs text-muted-foreground"
+			/>
+		</div>
+		<Button
+			variant="ghost"
+			size="icon"
+			onclick={() => api.togglePause()}
+			aria-label={playback.paused ? t('player.play') : t('player.pause')}
+		>
+			<HugeiconsIcon icon={PauseIcon} altIcon={PlayIcon} showAlt={playback.paused} class="h-6 w-6" />
+		</Button>
+		<Button variant="ghost" size="icon" onclick={() => api.nextTrack()} aria-label={t('player.next')}>
+			<HugeiconsIcon icon={NextIcon} class="h-6 w-6" />
+		</Button>
+	</div>
+	<!-- Thin progress line standing in for the full seek bar the row above has no room for. -->
+	<div class="h-0.5 bg-muted sm:hidden">
+		<div
+			class="h-full bg-primary"
+			style="width:{playback.duration ? (shownPosition / playback.duration) * 100 : 0}%"
+		></div>
+	</div>
+
+	<div class="hidden items-center gap-2 px-2 py-2.5 sm:flex sm:gap-4 sm:px-4 sm:py-3">
 	<!-- Now playing. data-ctx: right-clicking the cover or the title opens the ⋮ menu for the track
 	     that's playing (not the buttons beside them — those keep their own meaning). -->
 	<div class="flex min-w-0 flex-1 items-center gap-3" data-ctx>
@@ -407,5 +464,6 @@
 				/>
 			</Button>
 		</div>
+	</div>
 	</div>
 </footer>

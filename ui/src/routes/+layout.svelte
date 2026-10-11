@@ -30,6 +30,7 @@
 	import { blockForeignDrag, dragScroll } from '$lib/dnd';
 	import { suppressNative } from '$lib/menu';
 	import Sidebar from '$lib/components/Sidebar.svelte';
+	import BottomNav from '$lib/components/BottomNav.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import ResizeBorders from '$lib/components/ResizeBorders.svelte';
 	import PlayerBar from '$lib/components/PlayerBar.svelte';
@@ -275,6 +276,7 @@
 				/>
 			</div>
 		{/if}
+		<BottomNav />
 	</div>
 	<ListenTogether />
 	<PwaUpdatePrompt />

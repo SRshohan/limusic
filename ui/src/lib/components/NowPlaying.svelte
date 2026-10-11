@@ -183,9 +183,9 @@
 	onpointerup={(e) => (releasedKeep = keeps(e.target))}
 	onclick={onBackdropClick}
 	data-np-view
-	class="absolute inset-y-0 left-16 right-0 z-20 flex justify-center overflow-hidden px-4 py-4 inert:bg-background {video.hole
+	class="absolute inset-y-0 left-0 right-0 z-20 flex justify-center overflow-y-auto overflow-x-hidden px-4 py-4 inert:bg-background {video.hole
 		? ''
-		: 'bg-background'} sm:px-6 sm:py-6 lg:px-10 {ui.sidebarCollapsed
+		: 'bg-background'} sm:left-16 sm:px-6 sm:py-6 lg:px-10 {ui.sidebarCollapsed
 		? ''
 		: 'lg:left-60'} {inset}"
 >
@@ -231,16 +231,18 @@
 	     80rem cap exists to stop a square drifting into an empty half, which a video this wide
 	     never does. -->
 	<div
-		class="relative flex w-full gap-6 xl:gap-10 {showVideo() ? 'max-w-[100rem]' : 'max-w-[80rem]'}"
+		class="relative flex w-full gap-6 xl:gap-10 {tabbed
+			? 'flex-col md:flex-row'
+			: 'flex-row'} {showVideo() ? 'max-w-[100rem]' : 'max-w-[80rem]'}"
 		style="--art:calc(min(100%,100vh - 11rem) * 0.75); --vid:calc((100vh - 11rem) * 0.85 * 16 / 9)"
 	>
 		{#if !big}
-			<!-- Centred against the full height of the column on the right. Below md there isn't room
-			     for both columns, and the queue wins. Untabbed there is no second column, so the
-			     artwork is the whole view at every width. -->
-			<div
-				class="min-w-0 flex-1 items-center justify-center {tabbed ? 'hidden md:flex' : 'flex'}"
-			>
+			<!-- Stacked above the tabs below md (there isn't room for both side by side there — see
+			     #mobile-friendly audit, this used to hide the artwork entirely instead of stacking
+			     it); side by side at md+. Untabbed there is no second column, so the artwork is the
+			     whole view at every width. -->
+			<div class="flex shrink-0 items-center justify-center md:min-w-0 md:flex-1">
+
 				<!-- A div, not a button: the video-mode toggle has to be a sibling of the play/pause
 				     button rather than nested inside it (nested buttons are invalid HTML and the
 				     inner one never reliably gets the click). -->

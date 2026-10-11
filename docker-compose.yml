@@ -4,6 +4,8 @@ services:
       context: .
       dockerfile: deploy/Dockerfile
     restart: unless-stopped
+    environment:
+      - RUST_LOG=info,limusic_core=debug,server=debug
     # Host-side Caddy (already running outside Docker on this VPS for other sites) reverse-proxies
     # to this port; bound to loopback only, same pattern as this host's other containerized apps.
     ports:

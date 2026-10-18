@@ -58,6 +58,13 @@ let prevQueueSnapshot: { queue: SongItem[]; index: number; sourceName: string | 
 
 let resolvedVideoUrl: string | null = null;
 let resolveGeneration = 0;
+/** What `preloadNext` last resolved and handed to `AudioEngine.preload` — lets a manual skip reuse
+ *  it (`AudioEngine.usePreloaded`) instead of re-running the ~1s cipher/BotGuard/client-fallback
+ *  resolve pipeline for a URL that would come back identical anyway (`media.rs`'s resolve always
+ *  returns the same deterministic `/media/stream/{video_id}` path). `null` whenever there's nothing
+ *  usable: no next item, a cache hit (no `ResolveResponse` to stash — see `ResolvedUrls.resp`), or
+ *  the resolve itself failed. */
+let preloaded: { videoId: string; resp: ResolveResponse; video: string | null } | null = null;
 
 function current(): SongItem | undefined {
 	return queue[currentIndex];
@@ -174,10 +181,23 @@ async function playCurrent(autoplay: boolean) {
 	const item = current();
 	if (!item) return;
 	const gen = ++resolveGeneration;
+	const engine = getEngine();
 	try {
-		const { stream, video, resp, isObjectUrl } = await urlsFor(item);
-		if (gen !== resolveGeneration) return; // superseded by a newer play before this resolved
-		await getEngine().loadTrack(stream, { autoplay, objectUrl: isObjectUrl });
+		let video: string | null;
+		let resp: ResolveResponse | null;
+		const pending = preloaded;
+		if (pending && pending.videoId === item.video_id && (await engine.usePreloaded({ autoplay }))) {
+			resp = pending.resp;
+			video = pending.video;
+		} else {
+			const resolved = await urlsFor(item);
+			if (gen !== resolveGeneration) return; // superseded by a newer play before this resolved
+			await engine.loadTrack(resolved.stream, { autoplay, objectUrl: resolved.isObjectUrl });
+			resp = resolved.resp;
+			video = resolved.video;
+		}
+		if (gen !== resolveGeneration) return;
+		preloaded = null;
 		resolvedVideoUrl = video;
 		playback.now = toNowPlaying(item, resp?.stream_client ?? 'cache', resp?.is_video);
 		playback.rating = item.rating ?? 'indifferent';
@@ -208,10 +228,14 @@ async function playCurrent(autoplay: boolean) {
 
 async function preloadNext() {
 	const next = queue[currentIndex + 1];
+	preloaded = null;
 	if (!next) return;
 	try {
-		const { stream, isObjectUrl } = await urlsFor(next);
+		const { stream, video, resp, isObjectUrl } = await urlsFor(next);
 		getEngine().preload(stream, { objectUrl: isObjectUrl });
+		// A cache hit has no ResolveResponse to stash (see ResolvedUrls.resp) — a manual skip onto
+		// it still gets the engine-level reuse (AudioEngine.preloadedUrl), just not the resolve-skip.
+		if (resp) preloaded = { videoId: next.video_id, resp, video };
 	} catch {
 		// Falls back to a normal full load in `onEndedWithoutPreload` once playback gets there.
 	}

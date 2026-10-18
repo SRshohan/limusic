@@ -192,6 +192,38 @@ export class AudioEngine extends EventTarget {
 		idle.preloadedUrl = url;
 	}
 
+	/** The idle deck's preloaded URL, if any — lets a caller (a manual skip) check whether what it's
+	 *  about to play is already sitting preloaded before paying for a fresh `loadTrack`. */
+	get preloadedUrl(): string | null {
+		return this.#idleDeck().preloadedUrl;
+	}
+
+	/** Promotes the already-preloaded idle deck straight to active, the manual-skip counterpart to
+	 *  the automatic swap `#onEnded`/`#startCrossfade` already do when a track ends on its own.
+	 *  `loadTrack` would otherwise discard this deck's buffering/buffered media and force the *other*
+	 *  deck to re-fetch the same URL from scratch — the whole point of preloading it ahead of time.
+	 *  Returns false (nothing played) if there is no preload to promote; the caller falls back to a
+	 *  normal `loadTrack`. */
+	async usePreloaded(opts: { autoplay?: boolean } = {}): Promise<boolean> {
+		const idle = this.#idleDeck();
+		if (!idle.preloadedUrl) return false;
+		this.#cancelFade();
+		await this.#ctx.resume();
+		const oldActive = this.#activeDeck();
+		this.#swapToIdle();
+		const deck = this.#activeDeck();
+		deck.preloadedUrl = null;
+		deck.audio.currentTime = 0;
+		deck.gain.gain.cancelScheduledValues(this.#ctx.currentTime);
+		deck.gain.gain.value = this.#masterGain;
+		if (opts.autoplay) await deck.audio.play().catch(() => {});
+		oldActive.audio.pause();
+		oldActive.audio.currentTime = 0;
+		oldActive.preloadedUrl = null;
+		this.#releaseDeckUrl(oldActive);
+		return true;
+	}
+
 	/** Drops any preloaded successor without playing it (the queue changed before it was needed). */
 	clearPreload() {
 		const idle = this.#idleDeck();

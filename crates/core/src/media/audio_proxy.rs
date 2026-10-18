@@ -19,6 +19,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -26,6 +27,8 @@ use bytes::Bytes;
 use futures_util::StreamExt;
 use reqwest::header;
 use tokio::sync::mpsc;
+
+use super::orchestrator::PlaybackPing;
 
 /// How much of the file to ask upstream for in one range request. Large enough to amortise the
 /// per-request round trip and land in the "served at full speed" regime, small enough that a seek
@@ -63,6 +66,17 @@ pub struct Registration {
     headers: HashMap<String, String>,
     expires_at: Instant,
     meta: Mutex<Option<Meta>>,
+    /// The watch-history ping for this exact play (openspec/changes/http-audio-streaming's own
+    /// deferred-scope note: "a later change registers plays the same way the desktop app does" —
+    /// this is that change). `None` when no client's `/player` response carried a tracking URL,
+    /// same as desktop's `state.rs::on_position`.
+    ping: Option<PlaybackPing>,
+    /// One per registration (= one per play, including a re-resolve after expiry — correctly a
+    /// *new* play): `innertube::generate_cpn()`, mirrors desktop's `q.cpn` reset on every new play.
+    cpn: String,
+    /// Latches the ping to fire at most once per registration, mirroring desktop's
+    /// `AppState::history_pinged` atomic.
+    pinged: AtomicBool,
 }
 
 struct Registry {
@@ -77,13 +91,24 @@ fn registry() -> &'static Mutex<Registry> {
 }
 
 /// Register a resolved stream for `video_id`, replacing any existing entry for it. `expires_in`
-/// comes straight from `PlaybackData.expires_in_seconds`.
-pub fn register(video_id: &str, url: &str, headers: HashMap<String, String>, expires_in: Duration) {
+/// comes straight from `PlaybackData.expires_in_seconds`. `ping` is `PlaybackData.playback_ping` —
+/// pass it through even when `None` (a re-registration must drop a stale ping, not keep one from
+/// a different client's response).
+pub fn register(
+    video_id: &str,
+    url: &str,
+    headers: HashMap<String, String>,
+    expires_in: Duration,
+    ping: Option<PlaybackPing>,
+) {
     let reg = Arc::new(Registration {
         url: url.to_owned(),
         headers,
         expires_at: Instant::now() + expires_in,
         meta: Mutex::new(None),
+        ping,
+        cpn: innertube::generate_cpn(),
+        pinged: AtomicBool::new(false),
     });
     let mut r = registry().lock().unwrap();
     if !r.map.contains_key(video_id) {
@@ -95,6 +120,17 @@ pub fn register(video_id: &str, url: &str, headers: HashMap<String, String>, exp
         r.order.push_back(video_id.to_owned());
     }
     r.map.insert(video_id.to_owned(), reg);
+}
+
+/// Claim the one-time right to send `video_id`'s watch-history ping — `None` if there's no ping to
+/// send (no client's response carried a tracking URL, no live registration), or if something
+/// already claimed it for this play. The caller (`crates/server`) does the actual
+/// `register_playback` HTTP call; this module only owns the latch, the same split desktop's
+/// `AppState::on_position` draws between deciding and sending.
+pub fn take_ping(video_id: &str) -> Option<(PlaybackPing, String)> {
+    let reg = get(video_id)?;
+    let ping = reg.ping.clone()?;
+    (!reg.pinged.swap(true, Ordering::Relaxed)).then_some((ping, reg.cpn.clone()))
 }
 
 /// The live registration for `video_id`, or `None` if never registered or past its expiry (the
@@ -364,14 +400,14 @@ mod tests {
 
     #[test]
     fn register_then_get_round_trips_within_its_expiry() {
-        register("abc123", "https://x.googlevideo.com/videoplayback", HashMap::new(), Duration::from_secs(60));
+        register("abc123", "https://x.googlevideo.com/videoplayback", HashMap::new(), Duration::from_secs(60), None);
         let reg = get("abc123").expect("just registered");
         assert_eq!(reg.url, "https://x.googlevideo.com/videoplayback");
     }
 
     #[test]
     fn an_expired_registration_reads_as_a_miss() {
-        register("expired-entry", "https://x.googlevideo.com/videoplayback", HashMap::new(), Duration::from_secs(0));
+        register("expired-entry", "https://x.googlevideo.com/videoplayback", HashMap::new(), Duration::from_secs(0), None);
         std::thread::sleep(Duration::from_millis(5));
         assert!(get("expired-entry").is_none(), "past its expiry, a registration must not be served");
     }
@@ -379,9 +415,24 @@ mod tests {
     #[test]
     fn re_registering_the_same_video_id_does_not_grow_the_fifo() {
         for _ in 0..3 {
-            register("same-id", "https://x.googlevideo.com/videoplayback", HashMap::new(), Duration::from_secs(60));
+            register("same-id", "https://x.googlevideo.com/videoplayback", HashMap::new(), Duration::from_secs(60), None);
         }
         let r = registry().lock().unwrap();
         assert_eq!(r.order.iter().filter(|id| *id == "same-id").count(), 1);
+    }
+
+    #[test]
+    fn take_ping_fires_at_most_once_per_registration() {
+        let ping = PlaybackPing { url: "https://x/ptracking".to_owned(), client: "WEB_REMIX".to_owned() };
+        register("ping-id", "https://x.googlevideo.com/videoplayback", HashMap::new(), Duration::from_secs(60), Some(ping.clone()));
+        let (first, _cpn) = take_ping("ping-id").expect("a ping was registered");
+        assert_eq!(first.url, ping.url);
+        assert!(take_ping("ping-id").is_none(), "a second claim on the same play must find nothing left");
+    }
+
+    #[test]
+    fn take_ping_is_none_when_no_client_returned_a_tracking_url() {
+        register("no-ping-id", "https://x.googlevideo.com/videoplayback", HashMap::new(), Duration::from_secs(60), None);
+        assert!(take_ping("no-ping-id").is_none());
     }
 }

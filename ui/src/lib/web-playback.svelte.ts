@@ -10,6 +10,7 @@ import { np, playback, toast } from './player.svelte';
 import * as lt from './lt-client';
 import type { PlaybackWire } from './lt-client';
 import * as ytCache from './yt-cache';
+import { isLocalId } from './api.types';
 import type { NowPlaying, QueueState, PlaybackSnapshot, RepeatMode, SongItem, LtTrack } from './api.types';
 
 // Same split as api.web.ts's SERVER_URL — see its comment.
@@ -66,8 +67,44 @@ let resolveGeneration = 0;
  *  the resolve itself failed. */
 let preloaded: { videoId: string; resp: ResolveResponse; video: string | null } | null = null;
 
+/** Has this play already sent its watch-history ping? Reset on every new play (`playCurrent`,
+ *  `onAdvanced`) — see `maybeRegisterHistoryPing`'s own comment. */
+let historyPinged = false;
+
 function current(): SongItem | undefined {
 	return queue[currentIndex];
+}
+
+/** Mirrors desktop's `state.rs::history_threshold`: halfway into the track counts as a real play,
+ *  capped at 30s so a long track doesn't make the user wait minutes for it to register. `duration`
+ *  unknown (not yet reported by the `<audio>` element) means the full 30s, same as desktop falling
+ *  back to it while mpv hasn't reported one yet. */
+function historyThresholdSecs(duration: number): number {
+	return duration > 1 ? Math.min(duration / 2, 30) : 30;
+}
+
+/** Fires crates/server's watch-history ping once this play crosses `historyThresholdSecs` —
+ *  openspec/changes/http-audio-streaming's `ResolveResponse` doc comment called this out as
+ *  deliberately deferred ("a later change registers plays the same way the desktop app does").
+ *  Latched client-side (`historyPinged`) so a tick after the threshold doesn't keep posting; the
+ *  server's own `audio_proxy::take_ping` latches again independently, so a race between two ticks
+ *  (or a retry) still can't double-register. Fire-and-forget: there's nothing useful to do with a
+ *  failure here the server hasn't already logged. */
+function maybeRegisterHistoryPing() {
+	if (historyPinged) return;
+	const item = current();
+	// Local files were never watched on YouTube — nothing to register (mirrors desktop's own
+	// `!crate::local::is_local_song` guard, the one history-recording check that still applies
+	// client-side instead of server-side: the server has no idea which ids are local-only).
+	if (!item || isLocalId(item.video_id)) return;
+	if (playback.position < historyThresholdSecs(playback.duration)) return;
+	historyPinged = true;
+	fetch(`${SERVER_URL}/api/playback/register`, {
+		method: 'POST',
+		credentials: 'include',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ videoId: item.video_id })
+	}).catch(() => {});
 }
 
 function syncQueueState() {
@@ -135,6 +172,7 @@ function getEngine(): AudioEngine {
 		engine.addEventListener('position', (e) => {
 			playback.position = (e as CustomEvent).detail.seconds;
 			playback.positionAt = performance.now();
+			maybeRegisterHistoryPing();
 		});
 		engine.addEventListener('duration', (e) => {
 			playback.duration = (e as CustomEvent).detail.seconds;
@@ -182,6 +220,7 @@ async function playCurrent(autoplay: boolean) {
 	if (!item) return;
 	const gen = ++resolveGeneration;
 	const engine = getEngine();
+	historyPinged = false;
 	// Optimistic: the item's own title/artist/art are already fully known (they came from search/
 	// library data), so there's no reason to leave the *previous* track's info on screen — or
 	// nothing at all, on the very first play — for the ~1s a cold resolve can take below.
@@ -260,6 +299,7 @@ async function onAdvanced() {
 	const next = repeatMode === 'one' ? currentIndex : nextIndexFor(currentIndex);
 	if (next === null) return;
 	currentIndex = next;
+	historyPinged = false;
 	const item = current();
 	if (item) {
 		playback.now = toNowPlaying(item, playback.now?.streamClient ?? 'unknown');

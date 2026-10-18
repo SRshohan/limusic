@@ -6,13 +6,14 @@ use axum::{
     extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::Response,
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use innertube::AudioQuality;
 use limusic_core::media::{audio_proxy, orchestrator::ResolveError, video_proxy};
 use serde::{Deserialize, Serialize};
 
+use crate::session::RequireSession;
 use crate::{ApiError, ServerState};
 
 #[derive(Deserialize)]
@@ -85,7 +86,13 @@ async fn resolve(
         .map_err(resolve_err)?;
 
     let expires_in = Duration::from_secs(data.expires_in_seconds.max(0) as u64);
-    audio_proxy::register(video_id, &data.stream_url, data.headers.clone(), expires_in);
+    audio_proxy::register(
+        video_id,
+        &data.stream_url,
+        data.headers.clone(),
+        expires_in,
+        data.playback_ping.clone(),
+    );
 
     // The music-video URL (if any) comes from a separate resolve — best-effort, never blocks the
     // audio response on it.
@@ -126,7 +133,7 @@ async fn reresolve_audio(state: &ServerState, video_id: &str) -> Option<()> {
         .await
         .ok()?;
     let expires_in = Duration::from_secs(data.expires_in_seconds.max(0) as u64);
-    audio_proxy::register(video_id, &data.stream_url, data.headers, expires_in);
+    audio_proxy::register(video_id, &data.stream_url, data.headers, expires_in, data.playback_ping);
     Some(())
 }
 
@@ -205,9 +212,44 @@ async fn stream_video(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
+#[derive(Deserialize)]
+struct RegisterParams {
+    #[serde(rename = "videoId")]
+    video_id: String,
+}
+
+/// Watch-history ping — the piece `resolve`'s own doc comment on `ResolveResponse` called out as
+/// deliberately deferred ("a later change registers plays the same way the desktop app does").
+/// The frontend calls this once playback crosses the same threshold desktop's
+/// `AppState::on_position` uses (half the track's duration, capped at 30s — `historyThreshold` in
+/// web-playback.svelte.ts). Requires a session: watch history only means anything against a real
+/// signed-in account. Best-effort and idempotent either way: `audio_proxy::take_ping` latches so a
+/// retried/duplicate call can't double-register, and a missing/expired registration or a client
+/// YouTube never gave a tracking URL to both just no-op rather than error — same as desktop
+/// logging-and-ignoring this exact failure mode.
+async fn register_play(
+    State(state): State<ServerState>,
+    _session: RequireSession,
+    Json(body): Json<RegisterParams>,
+) -> StatusCode {
+    let Some((ping, cpn)) = audio_proxy::take_ping(&body.video_id) else {
+        return StatusCode::NO_CONTENT;
+    };
+    let Some(client) = state.app.clients.get(&ping.client) else {
+        tracing::warn!(client = %ping.client, "watch-history ping: unknown client");
+        return StatusCode::NO_CONTENT;
+    };
+    match state.app.it.register_playback(client, &ping.url, &cpn, None).await {
+        Ok(()) => tracing::debug!(client = %ping.client, "watch-history ping sent"),
+        Err(e) => tracing::warn!(error = %e, "watch-history ping failed"),
+    }
+    StatusCode::NO_CONTENT
+}
+
 pub fn router() -> Router<ServerState> {
     Router::new()
         .route("/api/playback/resolve", get(resolve))
+        .route("/api/playback/register", post(register_play))
         .route("/media/stream/{videoId}", get(stream_audio))
         .route("/media/video/{videoId}", get(stream_video))
 }

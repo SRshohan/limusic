@@ -182,6 +182,12 @@ async function playCurrent(autoplay: boolean) {
 	if (!item) return;
 	const gen = ++resolveGeneration;
 	const engine = getEngine();
+	// Optimistic: the item's own title/artist/art are already fully known (they came from search/
+	// library data), so there's no reason to leave the *previous* track's info on screen — or
+	// nothing at all, on the very first play — for the ~1s a cold resolve can take below.
+	playback.now = toNowPlaying(item, playback.now?.streamClient ?? 'resolving');
+	playback.rating = item.rating ?? 'indifferent';
+	setNowPlayingMeta({ title: item.title, artist: item.artists, album: item.album, artwork: item.thumbnail });
 	try {
 		let video: string | null;
 		let resp: ResolveResponse | null;
@@ -190,6 +196,7 @@ async function playCurrent(autoplay: boolean) {
 			resp = pending.resp;
 			video = pending.video;
 		} else {
+			playback.resolving = true;
 			const resolved = await urlsFor(item);
 			if (gen !== resolveGeneration) return; // superseded by a newer play before this resolved
 			await engine.loadTrack(resolved.stream, { autoplay, objectUrl: resolved.isObjectUrl });
@@ -198,6 +205,7 @@ async function playCurrent(autoplay: boolean) {
 		}
 		if (gen !== resolveGeneration) return;
 		preloaded = null;
+		playback.resolving = false;
 		resolvedVideoUrl = video;
 		playback.now = toNowPlaying(item, resp?.stream_client ?? 'cache', resp?.is_video);
 		playback.rating = item.rating ?? 'indifferent';
@@ -216,6 +224,7 @@ async function playCurrent(autoplay: boolean) {
 		void preloadNext();
 	} catch (e) {
 		if (gen !== resolveGeneration) return;
+		playback.resolving = false;
 		playback.now = toNowPlaying(item, 'error');
 		playback.paused = true;
 		// Previously silent: the position/duration stayed at 0:00 with no indication why.

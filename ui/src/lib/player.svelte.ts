@@ -26,6 +26,12 @@ export const playback = $state({
 	now: null as NowPlaying | null,
 	queue: { items: [], currentIndex: 0 } as QueueState,
 	paused: false,
+	/** Web build only (web-playback.svelte.ts): true while a cold resolve (cipher/BotGuard/client-
+	 *  fallback, ~1s) is in flight for the track about to play — a manual skip onto an already
+	 *  preloaded track never sets this, since there's nothing to wait on. Lets the transport show a
+	 *  spinner instead of looking stuck/broken for that second. Desktop never sets it (mpv's own
+	 *  resolve path has no equivalent user-visible gap), so it's always false there. */
+	resolving: false,
 	position: 0,
 	/** `performance.now()` when `position` last arrived. Ticks land at ~4 Hz, so `position` on its
 	 *  own is a sample up to 250 ms old; anything that has to line up with the audio *right now*

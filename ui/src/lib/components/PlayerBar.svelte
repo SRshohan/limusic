@@ -18,7 +18,8 @@
 		MinimizeScreenIcon,
 		MusicNote01Icon,
 		ArrowUp01Icon,
-		ArrowDown01Icon
+		ArrowDown01Icon,
+		Loading03Icon
 	} from '@hugeicons/core-free-icons';
 	import { fade } from 'svelte/transition';
 	import { goto } from '$app/navigation';
@@ -180,9 +181,16 @@
 			variant="ghost"
 			size="icon"
 			onclick={() => api.togglePause()}
+			disabled={playback.resolving}
 			aria-label={playback.paused ? t('player.play') : t('player.pause')}
 		>
-			<HugeiconsIcon icon={PauseIcon} altIcon={PlayIcon} showAlt={playback.paused} class="h-6 w-6" />
+			<!-- A cold resolve (~1s) otherwise looks frozen rather than working — see `playback.resolving`'s
+			     own comment (player.svelte.ts). -->
+			{#if playback.resolving}
+				<HugeiconsIcon icon={Loading03Icon} class="h-6 w-6 animate-spin" />
+			{:else}
+				<HugeiconsIcon icon={PauseIcon} altIcon={PlayIcon} showAlt={playback.paused} class="h-6 w-6" />
+			{/if}
 		</Button>
 		<Button variant="ghost" size="icon" onclick={() => api.nextTrack()} aria-label={t('player.next')}>
 			<HugeiconsIcon icon={NextIcon} class="h-6 w-6" />
@@ -344,16 +352,22 @@
 				size="icon"
 				class="rounded-full"
 				onclick={() => api.togglePause()}
+				disabled={playback.resolving}
 				aria-label={playback.paused ? t('player.play') : t('player.pause')}
 			>
 				<!-- HugeiconsIcon only re-renders `altIcon`/`showAlt`, not `icon` (frozen at mount) —
-			     so toggle via showAlt, not a ternary on `icon`. -->
-			<HugeiconsIcon
-				icon={PauseIcon}
-				altIcon={PlayIcon}
-				showAlt={playback.paused}
-				class="h-5 w-5"
-			/>
+			     so toggle via showAlt, not a ternary on `icon`. A cold resolve (~1s) otherwise looks
+			     frozen rather than working — see `playback.resolving`'s own comment (player.svelte.ts). -->
+			{#if playback.resolving}
+				<HugeiconsIcon icon={Loading03Icon} class="h-5 w-5 animate-spin" />
+			{:else}
+				<HugeiconsIcon
+					icon={PauseIcon}
+					altIcon={PlayIcon}
+					showAlt={playback.paused}
+					class="h-5 w-5"
+				/>
+			{/if}
 			</Button>
 			<Button variant="ghost" size="icon-sm" onclick={() => api.nextTrack()} aria-label={t('player.next')}>
 				<HugeiconsIcon icon={NextIcon} class="h-5 w-5" />

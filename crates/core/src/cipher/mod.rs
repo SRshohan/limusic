@@ -124,7 +124,14 @@ impl CipherDeobfuscator {
 
     /// `signatureCipher` string → a full, signed stream URL. `None` on any failure.
     pub async fn deobfuscate_stream_url(&self, cipher: &str, video_id: &str) -> Option<String> {
-        if self.ensure_analyzed(true).await.is_err() {
+        // `ensure_analyzed`'s `Err` (a `JsBridge::create`/`load_player` failure — the runtime itself
+        // never came up) used to vanish here: the orchestrator's own log for this path only ever
+        // says "no stream URL (deciphering unavailable?)", which reads identically whether the
+        // runtime failed to build at all or merely found no usable sig/n export. Surfacing it is
+        // the difference between "a video's player has nothing to discover" (expected, intermittent)
+        // and "nothing can decipher anything right now" (a real outage, as seen 2026-10-21).
+        if let Err(e) = self.ensure_analyzed(true).await {
+            tracing::warn!(video_id, error = %e, "cipher runtime unavailable — can't decipher");
             return None;
         }
         if !self.inner.lock().await.sig_available {

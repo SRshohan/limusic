@@ -57,27 +57,48 @@ needs to change as part of this work (see Decisions).
 
 ### 1. Split `AppState` into shared infrastructure + per-account session state
 
-Today's single struct splits into:
-- **Shared, process-wide** (unchanged in spirit, just no longer bundled with account state):
-  `Clients` (static client definitions), `Arc<CipherDeobfuscator>`, `Arc<PoTokenGenerator>`, the
-  `Orchestrator`, and the single `Db` handle. None of these are tied to a login.
-- **Per-account** (`AccountSession`, new): `it: InnerTube` (that account's cookie jar + healing
-  state) and the account's identifier (`account_key`). Created lazily on first sign-in for a given
-  `account_key`, kept alive for as long as any session references it.
+**Revised after implementation research** (the original version of this decision underestimated
+the surface area — corrected here rather than left inaccurate): `crates/core/src/state.rs`'s
+auth-flow methods are not a few isolated reads of `self.it` — `sign_in`/`sign_in_inner`,
+`account_identities`, `switch_account`/`switch_account_inner`, `activate_identity`,
+`persist_selected_identity`, `restore_auth_transport`, `persist_visitor_data`,
+`switch_google_account`/`switch_google_account_inner`, `forget_account`, `clear_session`,
+`sync_active_account`, `persist_rotated_cookie`, `keep_session_alive`, and `account_snapshot` —
+essentially the whole auth module, around a dozen methods — all read and mutate `self.it` and the
+account-identity-bearing parts of `self.db` together, as one implicit account's state. This means
+`AccountSession` isn't a thin `{ it, account_key }` pair with those methods left on `AppState`
+unchanged; those methods themselves move onto `AccountSession`, parameterized by its own
+`account_key` where they touch `self.db`.
 
-`Orchestrator::resolve` already only needs `self.it` for `is_logged_in()`/`visitor_data()`/
-`player(...)` calls — none of that requires the orchestrator to *own* a specific account's
-`InnerTube` at construction time. It takes `&InnerTube` as a per-call parameter instead, so one
-`Orchestrator` (and the one `cipher`/`potoken` runtime behind it) serves every account. This is
-the smallest change that gets concurrency right: the heaviest shared resources stay singular, only
-the account-identity-bearing parts become per-call.
+Note also: `crates/core` was already fork-and-frozen from `src-tauri` (per `signed-in-http-parity`)
+— `crates/core/src/state.rs` and `src-tauri/src/state.rs` are independent copies, not a shared
+module. Restructuring the former cannot affect the latter; desktop's single-account model is
+structurally unreachable from this change, not just unreferenced by its tasks.
+
+After the split:
+- **Shared, process-wide**: `Clients` (static client definitions), `Arc<CipherDeobfuscator>`,
+  `Arc<PoTokenGenerator>`, the `Orchestrator`, and the single `Db` handle. None of these are tied
+  to a login.
+- **Per-account** (`AccountSession`, new): `it: InnerTube`, `account_key: String`, its own
+  `auth: tokio::sync::Mutex<()>` (today's single process-wide "one auth transition at a time" lock
+  moves here too — see Risks), and the former `AppState` auth methods listed above, now methods on
+  `AccountSession` instead. Created lazily on first sign-in for a given `account_key`, kept alive
+  for as long as any session references it.
+
+`Orchestrator::resolve`/`resolve_video`/`headers_for` already only need `self.it` for
+`is_logged_in()`/`visitor_data()`/`cookie()`/`player(...)` calls — none of that requires the
+orchestrator to *own* a specific account's `InnerTube` at construction time. They take `&InnerTube`
+as a per-call parameter instead, so one `Orchestrator` (and the one `cipher`/`potoken` runtime
+behind it) serves every account.
 
 `ServerState` becomes `{ shared: Arc<Shared>, sessions: Arc<SessionStore>, accounts:
 Arc<RwLock<HashMap<AccountKey, Arc<AccountSession>>>> }`. `RequireSession` resolves session id →
 `account_key` (unchanged) → looks up the `Arc<AccountSession>` from the map, rejecting as
 unauthenticated if the account_key has no live entry (a process restart loses in-memory
 `AccountSession`s exactly like it already loses the single session today — not a new regression,
-see the already-known "session doesn't survive restart" gap).
+see the already-known "session doesn't survive restart" gap), and hands the resolved
+`Arc<AccountSession>` to the handler (not just the bare `account_key` string) so handlers don't
+each re-look it up.
 
 **Alternative considered**: one whole `AppState`-shaped struct per account (the mirror-image of
 today's design, just N of them). Rejected — it would duplicate the `Orchestrator`/`cipher`/
@@ -95,33 +116,64 @@ membership cache, keyed by YouTube's own globally-unique `playlist_id`) needs no
 users referencing the same real YouTube playlist should see the same cached membership; there's no
 collision to prevent.
 
+**Per-key classification** (resolved now — implementation research found every key in active use,
+settling the ambiguity design-time rather than leaving it to be guessed mid-implementation):
+- **Per-account** (gets the new `account_id` column): `session_cookie`, `visitor_data`,
+  `data_sync_id`, `selected_identity_json`, `account_json` (today's "active account" projection,
+  per account now), `quality`, `disabled_stream_clients`, `lastfm_session_key`, `lastfm_username`,
+  `locale`, `hide_videos` (these last two are structurally forced per-account regardless: both also
+  call `self.it.set_locale(...)`/`set_hide_videos(...)` directly, and `it` is becoming per-account),
+  `playlist_index_synced_at`, `account_selection_pending`, `lyrics_providers` (a personal taste
+  preference, same category as `quality`).
+- **Stays global** (no account scoping, same single row for the whole process): `potoken_session`
+  (BotGuard session-token persistence — infrastructure state, the same category as `cipher`/
+  `potoken` themselves, not account data) and `blocked_artists` (see Decision 5).
+- **Removed, not migrated**: `active_account`. Under one account per process this setting named
+  which `StoredAccount` row was "the" live one; under concurrent accounts there's no single active
+  one to name — a session's `account_key` (from `SessionStore`) already identifies which account a
+  request is for, directly, with no indirection through a settings row needed. Only
+  `crates/core`'s copy loses this — `src-tauri`'s independent copy (see Decision 1's note on the
+  fork) is untouched and keeps using it exactly as today.
+- `blocked_artists` staying global is deliberate, not an inconsistency: `crates/server/src/
+  blocked.rs`'s three routes currently take no `RequireSession` at all (a prior decision — a code
+  comment references reconciling this with `http-blocked-artists`'s own spec), and this change
+  doesn't add gating that capability never asked for. With no session to scope by, it stays what it
+  already structurally is: one global, ungated setting — a server-wide content filter, not a
+  personal one.
+
 **Alternative considered**: one SQLite file per account (`limusic-{account_id}.sqlite`). Rejected
 for this scale — it means N connection pools, N backup targets, and doesn't actually simplify the
 migration (the composite-key rebuild above is a one-time cost either way), for an operational
 complexity that only pays off at a scale this design isn't targeting.
 
-### 3. `audio_proxy`/`video_proxy` stay global and video_id-keyed — an accepted, bounded risk
+### 3. `audio_proxy`/`video_proxy` keyed by `(account_key, video_id)` — not shared, and not an
+accepted risk
 
-A resolved stream URL for video X is the same bytes regardless of who asked for it, so keeping
-these caches shared (not duplicated per account) avoids redundant resolve work for concurrent users
-watching the same thing. Accepted risk: if account A's resolve of an age-restricted or
-members-only video succeeds and account B then requests the same `video_id` while that entry is
-still live, B's `/media/stream/{id}` request is served from A's cached entry rather than failing or
-re-resolving under B's own (possibly lesser) access. For this design's target (a trusted household/
-friend group, not a public multi-tenant service), that's judged acceptable: it costs nothing a
-user's own account wouldn't also expose to anyone they shared a device with, and the alternative
-(duplicating the registry per account) undoes the point of a shared cache for the common case
-(everyone resolving the same popular tracks).
+**Revised after implementation research**: the original version of this decision kept these
+registries keyed by `video_id` alone and accepted the consequence as a content-visibility risk
+(account B's request being served account A's cached resolve for the same video). Research
+surfaced a stronger problem than that: a *video_id*-only key means a **second concurrent `register()`
+call for the same video overwrites the first's entry outright** — including its `headers` (the
+cookie an upload stream needs to authenticate as the account that resolved it). Two different
+accounts resolving the same popular track around the same moment isn't a rare edge case on a
+shared server; it's an expected one. The consequence isn't "the wrong account's cached data might
+get read" (a visibility risk), it's "an in-flight stream can start being served under a *different*
+account's credentials mid-request" — a correctness bug, not a documented trade-off.
 
-### 4. Watch-history pings become account-aware, not just session-aware
+Fixed by keying both registries by `(account_key, video_id)` instead of `video_id` alone. Each
+account gets its own cache entry per video; no overwrite, no cross-account credential leak. The
+cost is the efficiency `video_id`-only keying was for — two accounts resolving the same track no
+longer share one cached entry — judged acceptable at this design's scale (resolving is not the
+expensive, rate-limited part of the pipeline the way cipher/BotGuard are, which stay fully shared
+regardless).
 
-`audio_proxy::take_ping`'s claim must be account-scoped: a ping registered by account A's resolve
-can only be fired by a request authenticated as account A, not whichever account's request happens
-to reach `/api/playback/register` first. Concretely, `Registration` gains the resolving
-`account_key` alongside its existing `ping`/`cpn`; `take_ping(video_id, caller_account_key)` only
-returns a ping when the caller matches, and the route handler's `register_playback` call uses that
-specific account's `AccountSession.it`, not a single shared one. This follows directly from
-Decision 3: once the stream cache is shared, the ping it carries must not be.
+### 4. Watch-history pings are account-aware as a consequence of Decision 3, not a separate fix
+
+With the registries keyed by `(account_key, video_id)`, `audio_proxy::take_ping` naturally takes the
+caller's `account_key` as part of its lookup key — there is no longer a cross-account ping to guard
+against separately, because there is no longer a cross-account registration to find in the first
+place. The route handler's `register_playback` call uses that specific account's
+`AccountSession.it`.
 
 ## Risks / Trade-offs
 
@@ -129,8 +181,11 @@ Decision 3: once the stream cache is shared, the ping it carries must not be.
   memory footprint (cookie jar, in-flight request state) by the number of concurrent accounts] →
   Bounded by the stated capacity target (tens, not thousands); `InnerTube` itself is far lighter
   than the shared cipher/potoken V8 runtimes this design deliberately keeps singular.
-- [Cached stream URLs crossing account boundaries, per Decision 3] → Accepted for this design's
-  scale; documented explicitly rather than silently shipped.
+- [`(account_key, video_id)` keying (Decision 3) means two accounts resolving the same popular
+  track no longer share one cached entry, redoing resolve work that `video_id`-only keying would
+  have avoided] → Accepted: resolving isn't the expensive, rate-limited part of this pipeline
+  (cipher/BotGuard stay fully shared regardless); a correctness bug was not an acceptable price for
+  that efficiency.
 - [The composite-primary-key rebuild of `settings` is a real schema migration on an existing
   deployment's live data, not just an `ADD COLUMN`] → Mitigated by the Migration Plan below:
   back up first, rebuild offline during a short maintenance window, backfill existing rows under
@@ -161,8 +216,6 @@ Decision 3: once the stream cache is shared, the ping it carries must not be.
 
 ## Open Questions
 
-- Whether `account_selection_pending` (today a single global settings flag for the "choose which
-  channel to sign in as" flow) needs its own account-scoping treatment, or whether it's
-  inherently a pre-sign-in, not-yet-account-scoped concern that's fine to stay global — doesn't
-  change the schema decision above either way, so safe to resolve during implementation rather
-  than here.
+None remaining — `account_selection_pending`'s scoping is resolved in Decision 2's per-key
+classification (per-account: the pending multi-channel selection belongs to whichever account's
+sign-in triggered it).

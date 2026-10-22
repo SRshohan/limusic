@@ -15,7 +15,7 @@ async fn upgrade(
     State(state): State<ServerState>,
     _session: RequireSession,
 ) -> Response {
-    let mut rx = state.app.events.subscribe();
+    let mut rx = state.shared.events.subscribe();
     ws.on_upgrade(move |socket| async move { forward(socket, &mut rx).await })
 }
 

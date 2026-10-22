@@ -25,3 +25,9 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rand = { workspace = true }
+
+[dev-dependencies]
+# `ServiceExt::oneshot` only — drives the real router in-process for integration tests
+# (openspec/changes/multi-user-isolation task 7.1), no bound socket needed.
+tower = { version = "0.5", default-features = false, features = ["util"] }
+http-body-util = "0.1"

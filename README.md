@@ -226,6 +226,16 @@ for TLS and to serve the built `ui/web` static files — see
 [deploy/Caddyfile.limusic](deploy/Caddyfile.limusic) for a worked example.
 Account/session data persists in the `limusic-data` Docker volume.
 
+One running server supports several people signed into their own separate
+YouTube accounts at once, each with their own isolated library, playlists,
+settings, and watch history — sized for **~20 concurrently signed-in
+accounts** (a household or friend group sharing one VPS, not a public
+multi-tenant deployment). That's not a memory limit — it's bounded by the
+single dedicated thread every stream resolve serializes through for cipher
+deobfuscation and BotGuard token minting; see
+[openspec/changes/multi-user-isolation/design.md](openspec/changes/multi-user-isolation/design.md)
+for the full reasoning.
+
 ### Getting your cookie
 
 1. Open **music.youtube.com** in a new tab, signed in, and open DevTools

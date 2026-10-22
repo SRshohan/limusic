@@ -7,56 +7,56 @@ use crate::{command_err, ApiError, ServerState};
 
 async fn get_library(
     State(state): State<ServerState>,
-    _session: RequireSession,
+    session: RequireSession,
 ) -> Result<Json<Vec<BrowseItem>>, ApiError> {
-    Ok(Json(limusic_core::commands::library::get_library(&state.app).await.map_err(command_err)?))
+    let scoped = session.scoped(&state);
+    Ok(Json(limusic_core::commands::library::get_library(&scoped).await.map_err(command_err)?))
 }
 
 async fn get_library_albums(
     State(state): State<ServerState>,
-    _session: RequireSession,
+    session: RequireSession,
 ) -> Result<Json<Vec<BrowseItem>>, ApiError> {
+    let scoped = session.scoped(&state);
     Ok(Json(
-        limusic_core::commands::library::get_library_albums(&state.app)
-            .await
-            .map_err(command_err)?,
+        limusic_core::commands::library::get_library_albums(&scoped).await.map_err(command_err)?,
     ))
 }
 
 async fn get_library_artists(
     State(state): State<ServerState>,
-    _session: RequireSession,
+    session: RequireSession,
 ) -> Result<Json<Vec<BrowseItem>>, ApiError> {
+    let scoped = session.scoped(&state);
     Ok(Json(
-        limusic_core::commands::library::get_library_artists(&state.app)
-            .await
-            .map_err(command_err)?,
+        limusic_core::commands::library::get_library_artists(&scoped).await.map_err(command_err)?,
     ))
 }
 
 async fn get_upload_albums(
     State(state): State<ServerState>,
-    _session: RequireSession,
+    session: RequireSession,
 ) -> Result<Json<Vec<BrowseItem>>, ApiError> {
+    let scoped = session.scoped(&state);
     Ok(Json(
-        limusic_core::commands::library::get_upload_albums(&state.app)
-            .await
-            .map_err(command_err)?,
+        limusic_core::commands::library::get_upload_albums(&scoped).await.map_err(command_err)?,
     ))
 }
 
 async fn get_history(
     State(state): State<ServerState>,
-    _session: RequireSession,
+    session: RequireSession,
 ) -> Result<Json<Vec<HistoryGroup>>, ApiError> {
-    Ok(Json(limusic_core::commands::library::get_history(&state.app).await.map_err(command_err)?))
+    let scoped = session.scoped(&state);
+    Ok(Json(limusic_core::commands::library::get_history(&scoped).await.map_err(command_err)?))
 }
 
 async fn get_play_counts(
     State(state): State<ServerState>,
-    _session: RequireSession,
+    session: RequireSession,
 ) -> Json<std::collections::HashMap<String, i64>> {
-    Json(limusic_core::commands::library::play_counts(&state.app))
+    let scoped = session.scoped(&state);
+    Json(limusic_core::commands::library::play_counts(&scoped))
 }
 
 pub fn router() -> Router<ServerState> {

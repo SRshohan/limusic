@@ -15,7 +15,7 @@ use serde::Deserialize;
 use crate::{command_err, ApiError, ServerState};
 
 async fn get_blocked_artists(State(state): State<ServerState>) -> Json<Vec<BlockedArtist>> {
-    Json(limusic_core::commands::blocked::get_blocked_artists(&state.app))
+    Json(limusic_core::commands::blocked::get_blocked_artists(&state.shared))
 }
 
 #[derive(Deserialize)]
@@ -29,7 +29,7 @@ async fn block_artist(
     Json(body): Json<BlockBody>,
 ) -> Result<Json<Vec<BlockedArtist>>, ApiError> {
     Ok(Json(
-        limusic_core::commands::blocked::block_artist(&state.app, body.id, &body.name)
+        limusic_core::commands::blocked::block_artist(&state.shared, body.id, &body.name)
             .map_err(command_err)?,
     ))
 }
@@ -38,7 +38,7 @@ async fn unblock_artist(
     State(state): State<ServerState>,
     Path(key): Path<String>,
 ) -> Json<Vec<BlockedArtist>> {
-    Json(limusic_core::commands::blocked::unblock_artist(&state.app, &key))
+    Json(limusic_core::commands::blocked::unblock_artist(&state.shared, &key))
 }
 
 pub fn router() -> Router<ServerState> {

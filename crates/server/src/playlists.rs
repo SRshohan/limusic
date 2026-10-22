@@ -19,11 +19,12 @@ struct CreateBody {
 
 async fn create_playlist(
     State(state): State<ServerState>,
-    _session: RequireSession,
+    session: RequireSession,
     Json(body): Json<CreateBody>,
 ) -> Result<Json<String>, ApiError> {
+    let scoped = session.scoped(&state);
     Ok(Json(
-        limusic_core::commands::playlists::create_playlist(&state.app, &body.title)
+        limusic_core::commands::playlists::create_playlist(&scoped, &body.title)
             .await
             .map_err(command_err)?,
     ))
@@ -31,10 +32,11 @@ async fn create_playlist(
 
 async fn delete_playlist(
     State(state): State<ServerState>,
-    _session: RequireSession,
+    session: RequireSession,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    limusic_core::commands::playlists::delete_playlist(&state.app, &id)
+    let scoped = session.scoped(&state);
+    limusic_core::commands::playlists::delete_playlist(&scoped, &id)
         .await
         .map_err(command_err)?;
     Ok(StatusCode::NO_CONTENT)
@@ -49,12 +51,13 @@ struct EditBody {
 
 async fn edit_playlist_details(
     State(state): State<ServerState>,
-    _session: RequireSession,
+    session: RequireSession,
     Path(id): Path<String>,
     Json(body): Json<EditBody>,
 ) -> Result<StatusCode, ApiError> {
+    let scoped = session.scoped(&state);
     limusic_core::commands::playlists::edit_playlist_details(
-        &state.app,
+        &scoped,
         &id,
         body.name.as_deref(),
         body.description.as_deref(),
@@ -69,13 +72,14 @@ async fn edit_playlist_details(
 /// `commands::playlists::set_playlist_cover`'s doc comment); an empty body clears it.
 async fn set_playlist_cover(
     State(state): State<ServerState>,
-    _session: RequireSession,
+    session: RequireSession,
     Path(id): Path<String>,
     bytes: Bytes,
 ) -> Result<Json<Option<String>>, ApiError> {
+    let scoped = session.scoped(&state);
     let image = (!bytes.is_empty()).then(|| bytes.to_vec());
     Ok(Json(
-        limusic_core::commands::playlists::set_playlist_cover(&state.app, &id, image)
+        limusic_core::commands::playlists::set_playlist_cover(&scoped, &id, image)
             .await
             .map_err(command_err)?,
     ))
@@ -91,13 +95,14 @@ struct AddTrackBody {
 
 async fn add_to_playlist(
     State(state): State<ServerState>,
-    _session: RequireSession,
+    session: RequireSession,
     Path(id): Path<String>,
     Json(body): Json<AddTrackBody>,
 ) -> Result<Json<bool>, ApiError> {
+    let scoped = session.scoped(&state);
     Ok(Json(
         limusic_core::commands::playlists::add_to_playlist(
-            &state.app,
+            &scoped,
             &id,
             &body.video_id,
             body.allow_duplicates,
@@ -116,14 +121,15 @@ enum RemoveTracksBody {
 
 async fn remove_from_playlist(
     State(state): State<ServerState>,
-    _session: RequireSession,
+    session: RequireSession,
     Path(id): Path<String>,
     Json(body): Json<RemoveTracksBody>,
 ) -> Result<StatusCode, ApiError> {
+    let scoped = session.scoped(&state);
     match body {
         RemoveTracksBody::One { video_id, set_video_id } => {
             limusic_core::commands::playlists::remove_from_playlist(
-                &state.app,
+                &scoped,
                 &id,
                 &video_id,
                 &set_video_id,
@@ -132,7 +138,7 @@ async fn remove_from_playlist(
             .map_err(command_err)?;
         }
         RemoveTracksBody::Many { tracks } => {
-            limusic_core::commands::playlists::remove_many_from_playlist(&state.app, &id, &tracks)
+            limusic_core::commands::playlists::remove_many_from_playlist(&scoped, &id, &tracks)
                 .await
                 .map_err(command_err)?;
         }
@@ -147,11 +153,12 @@ struct SortBody {
 
 async fn set_playlist_sort(
     State(state): State<ServerState>,
-    _session: RequireSession,
+    session: RequireSession,
     Path(id): Path<String>,
     Json(body): Json<SortBody>,
 ) -> Result<StatusCode, ApiError> {
-    limusic_core::commands::playlists::set_playlist_sort(&state.app, &id, body.sort)
+    let scoped = session.scoped(&state);
+    limusic_core::commands::playlists::set_playlist_sort(&scoped, &id, body.sort)
         .await
         .map_err(command_err)?;
     Ok(StatusCode::NO_CONTENT)

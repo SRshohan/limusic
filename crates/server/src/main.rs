@@ -14,21 +14,25 @@ mod ratings;
 mod search;
 mod session;
 mod settings;
+#[cfg(test)]
+mod tests;
 mod ws;
 
 use std::sync::Arc;
 
 use axum::http::{header::CONTENT_TYPE, HeaderValue, Method, StatusCode};
-use limusic_core::state::AppState;
-use innertube::{Clients, InnerTube, Session};
+use limusic_core::state::Shared;
+use innertube::Clients;
 use tower_http::cors::CorsLayer;
 
-/// Everything a route handler needs: the forked `crates/core` state (account/library/settings
-/// logic) plus the session store `crates/core` deliberately doesn't own (design.md's
-/// "Enforcement" decision). `Clone` is cheap — both fields are already `Arc`-backed internally.
+/// Everything a route handler needs: the forked `crates/core` process-wide state, the registry of
+/// live per-account sessions (openspec/changes/multi-user-isolation), and the session-id store
+/// `crates/core` deliberately doesn't own (design.md's "Enforcement" decision). `Clone` is cheap —
+/// every field is already `Arc`-backed internally.
 #[derive(Clone)]
 pub(crate) struct ServerState {
-    pub(crate) app: Arc<AppState>,
+    pub(crate) shared: Arc<Shared>,
+    pub(crate) accounts: Arc<session::AccountRegistry>,
     pub(crate) sessions: Arc<session::SessionStore>,
 }
 
@@ -36,7 +40,7 @@ pub(crate) type ApiError = (StatusCode, String);
 
 /// Shared by every route: the anonymous metadata client every `innertube` call in this server
 /// uses. Factored out once it's needed by more than the original single route.
-pub(crate) fn metadata_client(state: &AppState) -> Result<&innertube::YouTubeClient, ApiError> {
+pub(crate) fn metadata_client(state: &Shared) -> Result<&innertube::YouTubeClient, ApiError> {
     state
         .clients
         .get(innertube::METADATA_CLIENT)
@@ -60,6 +64,26 @@ pub(crate) fn command_err(message: String) -> ApiError {
     (StatusCode::BAD_REQUEST, message)
 }
 
+/// The full route table, merged and bound to `state` — factored out of `main` so
+/// `#[cfg(test)]` integration tests can drive it directly (`tower::ServiceExt::oneshot`) without
+/// a bound socket. No `CorsLayer` here: that's a browser-only concern `main` adds on top.
+fn app(state: ServerState) -> axum::Router {
+    search::router()
+        .merge(browse::router())
+        .merge(auth::router())
+        .merge(ws::router())
+        .merge(library::router())
+        .merge(playlists::router())
+        .merge(ratings::router())
+        .merge(settings::router())
+        .merge(lyrics::router())
+        .merge(lastfm::router())
+        .merge(blocked::router())
+        .merge(diagnostics::router())
+        .merge(media::router())
+        .with_state(state)
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
@@ -77,22 +101,24 @@ async fn main() {
     }
     let db = Arc::new(db);
 
-    let lastfm = limusic_core::lastfm::spawn(db.get_setting("lastfm_session_key"));
+    // No session key to restore at boot: `LastfmHandle` is one scrobbler task shared by every
+    // concurrently signed-in account (openspec/changes/multi-user-isolation), while
+    // `lastfm_session_key` is stored per-account — there is no single "the" account's key to
+    // restore automatically any more. A user whose Last.fm was connected before a restart
+    // reconnects via the titlebar button, same as a fresh sign-in would need to anyway.
+    let lastfm = limusic_core::lastfm::spawn(None);
 
     // Same "cargo run development artifact" stance as the sqlite path above — a fixed relative
     // directory, not yet a real configuration story (http-search-vertical-slice design.md).
     let app_data_dir = std::path::Path::new("limusic-server-data");
     std::fs::create_dir_all(app_data_dir).expect("failed to create limusic-server-data");
 
-    let app_state = Arc::new(AppState::new(
-        InnerTube::new(Session::default(), None).expect("failed to build InnerTube client"),
-        Clients::bundled(),
-        db,
-        lastfm,
-        app_data_dir,
-    ));
-    let state =
-        ServerState { app: app_state, sessions: Arc::new(session::SessionStore::default()) };
+    let shared = Arc::new(Shared::new(Clients::bundled(), db, lastfm, app_data_dir));
+    let state = ServerState {
+        shared,
+        accounts: Arc::new(session::AccountRegistry::default()),
+        sessions: Arc::new(session::SessionStore::default()),
+    };
 
     // Permissive but explicit, not `CorsLayer::permissive()`: a named origin is one line more and
     // doesn't invite copy-pasting a wildcard into a later, less throwaway version of this file.
@@ -103,21 +129,7 @@ async fn main() {
         .allow_headers([CONTENT_TYPE])
         .allow_credentials(true);
 
-    let app = search::router()
-        .merge(browse::router())
-        .merge(auth::router())
-        .merge(ws::router())
-        .merge(library::router())
-        .merge(playlists::router())
-        .merge(ratings::router())
-        .merge(settings::router())
-        .merge(lyrics::router())
-        .merge(lastfm::router())
-        .merge(blocked::router())
-        .merge(diagnostics::router())
-        .merge(media::router())
-        .with_state(state)
-        .layer(cors);
+    let app = app(state).layer(cors);
 
     // Defaults to the existing localhost-only dev behavior; a container deployment sets
     // BIND_ADDR=0.0.0.0:8787 so Docker's port publishing (itself bound to 127.0.0.1 on the host,

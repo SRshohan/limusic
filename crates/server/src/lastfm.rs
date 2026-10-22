@@ -12,22 +12,25 @@ struct ConnectResponse {
 
 async fn lastfm_connect(
     State(state): State<ServerState>,
-    _session: RequireSession,
+    session: RequireSession,
 ) -> Result<Json<ConnectResponse>, ApiError> {
+    let owned = session.scoped_owned(&state);
     let authorize_url =
-        limusic_core::commands::lastfm::lastfm_connect(state.app.clone()).await.map_err(command_err)?;
+        limusic_core::commands::lastfm::lastfm_connect(owned).await.map_err(command_err)?;
     Ok(Json(ConnectResponse { authorize_url }))
 }
 
-async fn lastfm_disconnect(State(state): State<ServerState>, _session: RequireSession) {
-    limusic_core::commands::lastfm::lastfm_disconnect(&state.app);
+async fn lastfm_disconnect(State(state): State<ServerState>, session: RequireSession) {
+    let scoped = session.scoped(&state);
+    limusic_core::commands::lastfm::lastfm_disconnect(&scoped);
 }
 
 async fn lastfm_status(
     State(state): State<ServerState>,
-    _session: RequireSession,
+    session: RequireSession,
 ) -> Json<serde_json::Value> {
-    Json(limusic_core::commands::lastfm::lastfm_status(&state.app))
+    let scoped = session.scoped(&state);
+    Json(limusic_core::commands::lastfm::lastfm_status(&scoped))
 }
 
 pub fn router() -> Router<ServerState> {

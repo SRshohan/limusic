@@ -185,6 +185,19 @@ against separately, because there is no longer a cross-account registration to f
 place. The route handler's `register_playback` call uses that specific account's
 `AccountSession.it`.
 
+### 6. Concrete capacity target: ~20 concurrently signed-in accounts
+
+Bounded not by memory (an `AccountSession`'s `InnerTube` cookie jar is a few KB — negligible even
+at this count) but by the single dedicated thread every cipher-deobfuscation and BotGuard PoToken
+mint serializes through (`crates/core/src/v8root.rs` — one V8 instance, one thread, confirmed by
+that module's own `botguard_and_cipher_jobs_run_on_the_same_dedicated_thread` test). Every
+concurrently signed-in account's stream resolves funnel through that same thread; each mint/decode
+is single-digit milliseconds, so ~20 users each resolving a track every few minutes amortizes
+without the shared thread becoming a queueing bottleneck. This is a sizing guideline for the
+"household/friend-group VPS" deployment this change targets, not an enforced admission limit (see
+Non-Goals) — a deployment that wants more headroom is free to try it; this is where the design
+expects contention to show up first if it does.
+
 ## Risks / Trade-offs
 
 - [A long-lived `AccountSession` per concurrently-active account multiplies `InnerTube`'s own

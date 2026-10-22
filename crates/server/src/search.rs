@@ -21,11 +21,10 @@ async fn search(
     Query(params): Query<QueryParam>,
 ) -> Result<Json<Vec<SongItem>>, ApiError> {
     let query = require_query(params.q)?;
-    let client = metadata_client(&state.app)?;
+    let client = metadata_client(&state.shared)?;
 
     // No session to record history against yet (anonymous only) — see design.md.
-    let result = state
-        .app.it
+    let result = state.shared.anonymous_it
         .search_songs(client, &query, false)
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
@@ -38,10 +37,9 @@ async fn search_all(
     Query(params): Query<QueryParam>,
 ) -> Result<Json<SearchResults>, ApiError> {
     let query = require_query(params.q)?;
-    let client = metadata_client(&state.app)?;
+    let client = metadata_client(&state.shared)?;
 
-    let result = state
-        .app.it
+    let result = state.shared.anonymous_it
         .search_all(client, &query, false)
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
@@ -60,9 +58,8 @@ async fn search_suggestions(
         return Ok(Json(SearchSuggestions::default()));
     }
 
-    let client = metadata_client(&state.app)?;
-    let result = state
-        .app.it
+    let client = metadata_client(&state.shared)?;
+    let result = state.shared.anonymous_it
         .search_suggestions(client, &query)
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
@@ -84,9 +81,9 @@ async fn search_cards(
     let category = params
         .category
         .ok_or((StatusCode::BAD_REQUEST, "missing `category` query parameter".to_owned()))?;
-    let client = metadata_client(&state.app)?;
+    let client = metadata_client(&state.shared)?;
 
-    let result = state.app.it.search_cards(client, &query, &category).await.map_err(|e| match e {
+    let result = state.shared.anonymous_it.search_cards(client, &query, &category).await.map_err(|e| match e {
         // `search_cards` validates `category` itself before any network call — distinguishable
         // from an upstream failure, so it gets its own `400` instead of the generic `502` below
         // (see design.md's "Error mapping" decision).
@@ -104,10 +101,9 @@ async fn search_videos(
     Query(params): Query<QueryParam>,
 ) -> Result<Json<Vec<SongItem>>, ApiError> {
     let query = require_query(params.q)?;
-    let client = metadata_client(&state.app)?;
+    let client = metadata_client(&state.shared)?;
 
-    let result = state
-        .app.it
+    let result = state.shared.anonymous_it
         .search_videos(client, &query)
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;

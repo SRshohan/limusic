@@ -28,7 +28,9 @@ fn header_text(state: &ServerState) -> String {
         std::env::consts::OS,
         std::env::consts::ARCH,
     );
-    let _ = writeln!(out, "signed in: {}", state.app.it.is_logged_in());
+    // There is no single "signed in" bool any more (openspec/changes/multi-user-isolation) — several
+    // accounts can be concurrently signed in, each independent of the others.
+    let _ = writeln!(out, "signed-in accounts: {}", state.accounts.len());
     out.push_str("env:\n");
     for key in ENV_KEYS {
         let present = std::env::var(key).is_ok_and(|v| !v.is_empty());

@@ -45,9 +45,8 @@ async fn get_home(
     State(state): State<ServerState>,
     Query(params): Query<HomeParams>,
 ) -> Result<Json<HomePage>, ApiError> {
-    let client = metadata_client(&state.app)?;
-    let page = state
-        .app.it
+    let client = metadata_client(&state.shared)?;
+    let page = state.shared.anonymous_it
         .home(client, params.params.as_deref())
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
@@ -64,9 +63,8 @@ async fn get_home_more(
     Query(params): Query<TokenParams>,
 ) -> Result<Json<HomePage>, ApiError> {
     let token = require_token(params.token)?;
-    let client = metadata_client(&state.app)?;
-    let page = state
-        .app.it
+    let client = metadata_client(&state.shared)?;
+    let page = state.shared.anonymous_it
         .home_continuation(client, &token)
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
@@ -80,9 +78,9 @@ async fn get_album(
     if id.starts_with(LOCAL_ALBUM_PREFIX) || id.starts_with(LOCAL_ARTIST_PREFIX) {
         return Err(desktop_local_id(&id));
     }
-    let client = metadata_client(&state.app)?;
+    let client = metadata_client(&state.shared)?;
     let page =
-        state.app.it.album(client, &id).await.map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+        state.shared.anonymous_it.album(client, &id).await.map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
     Ok(Json(page))
 }
 
@@ -90,9 +88,9 @@ async fn get_artist(
     State(state): State<ServerState>,
     Path(id): Path<String>,
 ) -> Result<Json<ArtistPage>, ApiError> {
-    let client = metadata_client(&state.app)?;
+    let client = metadata_client(&state.shared)?;
     let page =
-        state.app.it.artist(client, &id).await.map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+        state.shared.anonymous_it.artist(client, &id).await.map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
     Ok(Json(page))
 }
 
@@ -110,10 +108,9 @@ async fn get_playlist(
     if id == ON_REPEAT_ID || id.starts_with(LOCAL_PLAYLIST_PREFIX) {
         return Err(desktop_local_id(&id));
     }
-    let client = metadata_client(&state.app)?;
+    let client = metadata_client(&state.shared)?;
     let sort = params.sort.map(|s| (s, params.desc.unwrap_or(false)));
-    let page = state
-        .app.it
+    let page = state.shared.anonymous_it
         .playlist(client, &id, sort)
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
@@ -125,9 +122,8 @@ async fn get_playlist_more(
     Query(params): Query<TokenParams>,
 ) -> Result<Json<PlaylistContinuation>, ApiError> {
     let token = require_token(params.token)?;
-    let client = metadata_client(&state.app)?;
-    let page = state
-        .app.it
+    let client = metadata_client(&state.shared)?;
+    let page = state.shared.anonymous_it
         .playlist_continuation(client, &token)
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
@@ -137,9 +133,9 @@ async fn get_playlist_more(
 async fn get_moods(
     State(state): State<ServerState>,
 ) -> Result<Json<Vec<MoodSection>>, ApiError> {
-    let client = metadata_client(&state.app)?;
+    let client = metadata_client(&state.shared)?;
     let sections =
-        state.app.it.moods(client).await.map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+        state.shared.anonymous_it.moods(client).await.map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
     Ok(Json(sections))
 }
 
@@ -153,10 +149,10 @@ async fn get_mood_art(
     State(state): State<ServerState>,
     Json(params): Json<Vec<String>>,
 ) -> Result<Json<HashMap<String, String>>, ApiError> {
-    let client = metadata_client(&state.app)?;
+    let client = metadata_client(&state.shared)?;
     let mut art = HashMap::new();
     for p in params {
-        if let Ok(items) = state.app.it.browse_grid(client, MOODS_CATEGORY_ID, Some(&p)).await {
+        if let Ok(items) = state.shared.anonymous_it.browse_grid(client, MOODS_CATEGORY_ID, Some(&p)).await {
             if let Some(thumbnail) = items.into_iter().find_map(|i| i.thumbnail) {
                 art.insert(p, thumbnail);
             }
@@ -175,9 +171,8 @@ async fn get_browse_grid(
     Path(id): Path<String>,
     Query(params): Query<BrowseGridParams>,
 ) -> Result<Json<Vec<BrowseItem>>, ApiError> {
-    let client = metadata_client(&state.app)?;
-    let items = state
-        .app.it
+    let client = metadata_client(&state.shared)?;
+    let items = state.shared.anonymous_it
         .browse_grid(client, &id, params.params.as_deref())
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;

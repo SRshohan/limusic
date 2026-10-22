@@ -79,9 +79,17 @@ pub struct Registration {
     pinged: AtomicBool,
 }
 
+/// `(account_key, video_id)` — openspec/changes/multi-user-isolation: keying by `video_id` alone
+/// meant two different accounts resolving the same video around the same time silently clobbered
+/// each other's registration, headers included (a real correctness/credential bug, not just a
+/// content-visibility one — see design.md Decision 3). `GLOBAL_ACCOUNT`/`ANONYMOUS` is a real
+/// account_key value here (anonymous callers all share one registration per video, same as before
+/// for the common anonymous case), not a special case of this type.
+type RegKey = (String, String);
+
 struct Registry {
-    map: HashMap<String, Arc<Registration>>,
-    order: VecDeque<String>,
+    map: HashMap<RegKey, Arc<Registration>>,
+    order: VecDeque<RegKey>,
 }
 
 static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
@@ -90,17 +98,19 @@ fn registry() -> &'static Mutex<Registry> {
     REGISTRY.get_or_init(|| Mutex::new(Registry { map: HashMap::new(), order: VecDeque::new() }))
 }
 
-/// Register a resolved stream for `video_id`, replacing any existing entry for it. `expires_in`
-/// comes straight from `PlaybackData.expires_in_seconds`. `ping` is `PlaybackData.playback_ping` —
-/// pass it through even when `None` (a re-registration must drop a stale ping, not keep one from
-/// a different client's response).
+/// Register a resolved stream for `(account_key, video_id)`, replacing any existing entry for that
+/// exact pair. `expires_in` comes straight from `PlaybackData.expires_in_seconds`. `ping` is
+/// `PlaybackData.playback_ping` — pass it through even when `None` (a re-registration must drop a
+/// stale ping, not keep one from a different client's response).
 pub fn register(
+    account_key: &str,
     video_id: &str,
     url: &str,
     headers: HashMap<String, String>,
     expires_in: Duration,
     ping: Option<PlaybackPing>,
 ) {
+    let key: RegKey = (account_key.to_owned(), video_id.to_owned());
     let reg = Arc::new(Registration {
         url: url.to_owned(),
         headers,
@@ -111,32 +121,33 @@ pub fn register(
         pinged: AtomicBool::new(false),
     });
     let mut r = registry().lock().unwrap();
-    if !r.map.contains_key(video_id) {
+    if !r.map.contains_key(&key) {
         while r.order.len() >= MAX_REGISTRATIONS {
             if let Some(old) = r.order.pop_front() {
                 r.map.remove(&old);
             }
         }
-        r.order.push_back(video_id.to_owned());
+        r.order.push_back(key.clone());
     }
-    r.map.insert(video_id.to_owned(), reg);
+    r.map.insert(key, reg);
 }
 
-/// Claim the one-time right to send `video_id`'s watch-history ping — `None` if there's no ping to
-/// send (no client's response carried a tracking URL, no live registration), or if something
-/// already claimed it for this play. The caller (`crates/server`) does the actual
-/// `register_playback` HTTP call; this module only owns the latch, the same split desktop's
-/// `AppState::on_position` draws between deciding and sending.
-pub fn take_ping(video_id: &str) -> Option<(PlaybackPing, String)> {
-    let reg = get(video_id)?;
+/// Claim the one-time right to send `(account_key, video_id)`'s watch-history ping — `None` if
+/// there's no ping to send (no client's response carried a tracking URL, no live registration), or
+/// if something already claimed it for this play. The caller (`crates/server`) does the actual
+/// `register_playback` HTTP call through *this same account's* `InnerTube` — the registry being
+/// keyed by account_key already is what makes that pairing correct, not a separate check here.
+pub fn take_ping(account_key: &str, video_id: &str) -> Option<(PlaybackPing, String)> {
+    let reg = get(account_key, video_id)?;
     let ping = reg.ping.clone()?;
     (!reg.pinged.swap(true, Ordering::Relaxed)).then_some((ping, reg.cpn.clone()))
 }
 
-/// The live registration for `video_id`, or `None` if never registered or past its expiry (the
-/// route handler re-resolves on a miss — see design.md D4).
-pub fn get(video_id: &str) -> Option<Arc<Registration>> {
-    let reg = registry().lock().unwrap().map.get(video_id).cloned()?;
+/// The live registration for `(account_key, video_id)`, or `None` if never registered or past its
+/// expiry (the route handler re-resolves on a miss — see design.md D4).
+pub fn get(account_key: &str, video_id: &str) -> Option<Arc<Registration>> {
+    let key: RegKey = (account_key.to_owned(), video_id.to_owned());
+    let reg = registry().lock().unwrap().map.get(&key).cloned()?;
     (Instant::now() < reg.expires_at).then_some(reg)
 }
 
@@ -322,10 +333,15 @@ pub struct ServeInfo {
     pub content_type: Option<String>,
 }
 
-/// Resolve what to serve for `video_id` given a `Range` header value, without starting the actual
-/// byte pump. `None` on a cache miss (caller re-resolves) or an unsatisfiable range.
-pub async fn serve_info(video_id: &str, range: Option<&str>) -> Option<(Arc<Registration>, ServeInfo)> {
-    let reg = get(video_id)?;
+/// Resolve what to serve for `(account_key, video_id)` given a `Range` header value, without
+/// starting the actual byte pump. `None` on a cache miss (caller re-resolves) or an unsatisfiable
+/// range.
+pub async fn serve_info(
+    account_key: &str,
+    video_id: &str,
+    range: Option<&str>,
+) -> Option<(Arc<Registration>, ServeInfo)> {
+    let reg = get(account_key, video_id)?;
     let meta = meta_for(&reg).await.ok()?;
     let want = parse_range(range);
     let (start, end) = resolve_window(want, meta.total)?;
@@ -400,39 +416,49 @@ mod tests {
 
     #[test]
     fn register_then_get_round_trips_within_its_expiry() {
-        register("abc123", "https://x.googlevideo.com/videoplayback", HashMap::new(), Duration::from_secs(60), None);
-        let reg = get("abc123").expect("just registered");
+        register("acct", "abc123", "https://x.googlevideo.com/videoplayback", HashMap::new(), Duration::from_secs(60), None);
+        let reg = get("acct", "abc123").expect("just registered");
         assert_eq!(reg.url, "https://x.googlevideo.com/videoplayback");
     }
 
     #[test]
     fn an_expired_registration_reads_as_a_miss() {
-        register("expired-entry", "https://x.googlevideo.com/videoplayback", HashMap::new(), Duration::from_secs(0), None);
+        register("acct", "expired-entry", "https://x.googlevideo.com/videoplayback", HashMap::new(), Duration::from_secs(0), None);
         std::thread::sleep(Duration::from_millis(5));
-        assert!(get("expired-entry").is_none(), "past its expiry, a registration must not be served");
+        assert!(get("acct", "expired-entry").is_none(), "past its expiry, a registration must not be served");
     }
 
     #[test]
     fn re_registering_the_same_video_id_does_not_grow_the_fifo() {
         for _ in 0..3 {
-            register("same-id", "https://x.googlevideo.com/videoplayback", HashMap::new(), Duration::from_secs(60), None);
+            register("acct", "same-id", "https://x.googlevideo.com/videoplayback", HashMap::new(), Duration::from_secs(60), None);
         }
         let r = registry().lock().unwrap();
-        assert_eq!(r.order.iter().filter(|id| *id == "same-id").count(), 1);
+        assert_eq!(r.order.iter().filter(|(_, id)| id == "same-id").count(), 1);
     }
 
     #[test]
     fn take_ping_fires_at_most_once_per_registration() {
         let ping = PlaybackPing { url: "https://x/ptracking".to_owned(), client: "WEB_REMIX".to_owned() };
-        register("ping-id", "https://x.googlevideo.com/videoplayback", HashMap::new(), Duration::from_secs(60), Some(ping.clone()));
-        let (first, _cpn) = take_ping("ping-id").expect("a ping was registered");
+        register("acct", "ping-id", "https://x.googlevideo.com/videoplayback", HashMap::new(), Duration::from_secs(60), Some(ping.clone()));
+        let (first, _cpn) = take_ping("acct", "ping-id").expect("a ping was registered");
         assert_eq!(first.url, ping.url);
-        assert!(take_ping("ping-id").is_none(), "a second claim on the same play must find nothing left");
+        assert!(take_ping("acct", "ping-id").is_none(), "a second claim on the same play must find nothing left");
     }
 
     #[test]
     fn take_ping_is_none_when_no_client_returned_a_tracking_url() {
-        register("no-ping-id", "https://x.googlevideo.com/videoplayback", HashMap::new(), Duration::from_secs(60), None);
-        assert!(take_ping("no-ping-id").is_none());
+        register("acct", "no-ping-id", "https://x.googlevideo.com/videoplayback", HashMap::new(), Duration::from_secs(60), None);
+        assert!(take_ping("acct", "no-ping-id").is_none());
+    }
+
+    /// openspec/changes/multi-user-isolation: the whole point of the `(account_key, video_id)` key
+    /// — two accounts resolving the same video must not clobber each other's registration.
+    #[test]
+    fn two_accounts_registering_the_same_video_id_do_not_clobber_each_other() {
+        register("acct-a", "shared-video", "https://x/a", HashMap::new(), Duration::from_secs(60), None);
+        register("acct-b", "shared-video", "https://x/b", HashMap::new(), Duration::from_secs(60), None);
+        assert_eq!(get("acct-a", "shared-video").unwrap().url, "https://x/a");
+        assert_eq!(get("acct-b", "shared-video").unwrap().url, "https://x/b");
     }
 }

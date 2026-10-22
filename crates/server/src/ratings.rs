@@ -18,11 +18,12 @@ struct RatingBody {
 
 async fn rate(
     State(state): State<ServerState>,
-    _session: RequireSession,
+    session: RequireSession,
     Path(video_id): Path<String>,
     Json(body): Json<RatingBody>,
 ) -> Result<StatusCode, ApiError> {
-    limusic_core::commands::ratings::rate(&state.app, &video_id, body.rating)
+    let scoped = session.scoped(&state);
+    limusic_core::commands::ratings::rate(&scoped, &video_id, body.rating)
         .await
         .map_err(command_err)?;
     Ok(StatusCode::NO_CONTENT)
@@ -42,10 +43,11 @@ struct SongSavedBody {
 
 async fn set_song_saved(
     State(state): State<ServerState>,
-    _session: RequireSession,
+    session: RequireSession,
     Json(body): Json<SongSavedBody>,
 ) -> Result<StatusCode, ApiError> {
-    limusic_core::commands::ratings::set_song_saved(&state.app, &body.token)
+    let scoped = session.scoped(&state);
+    limusic_core::commands::ratings::set_song_saved(&scoped, &body.token)
         .await
         .map_err(command_err)?;
     Ok(StatusCode::NO_CONTENT)
@@ -53,11 +55,12 @@ async fn set_song_saved(
 
 async fn set_album_saved(
     State(state): State<ServerState>,
-    _session: RequireSession,
+    session: RequireSession,
     Path(playlist_id): Path<String>,
     Json(body): Json<SavedBody>,
 ) -> Result<StatusCode, ApiError> {
-    limusic_core::commands::ratings::set_album_saved(&state.app, &playlist_id, body.saved)
+    let scoped = session.scoped(&state);
+    limusic_core::commands::ratings::set_album_saved(&scoped, &playlist_id, body.saved)
         .await
         .map_err(command_err)?;
     Ok(StatusCode::NO_CONTENT)
@@ -70,11 +73,12 @@ struct SubscribedBody {
 
 async fn subscribe(
     State(state): State<ServerState>,
-    _session: RequireSession,
+    session: RequireSession,
     Path(channel_id): Path<String>,
     Json(body): Json<SubscribedBody>,
 ) -> Result<StatusCode, ApiError> {
-    limusic_core::commands::ratings::subscribe(&state.app, &channel_id, body.subscribed)
+    let scoped = session.scoped(&state);
+    limusic_core::commands::ratings::subscribe(&scoped, &channel_id, body.subscribed)
         .await
         .map_err(command_err)?;
     Ok(StatusCode::NO_CONTENT)

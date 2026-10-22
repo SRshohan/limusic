@@ -12,17 +12,19 @@ use crate::{command_err, ApiError, ServerState};
 
 async fn get_all_settings(
     State(state): State<ServerState>,
-    _session: RequireSession,
+    session: RequireSession,
 ) -> Json<std::collections::HashMap<String, String>> {
-    Json(limusic_core::commands::settings::get_all_settings(&state.app))
+    let scoped = session.scoped(&state);
+    Json(limusic_core::commands::settings::get_all_settings(&scoped))
 }
 
 async fn get_setting(
     State(state): State<ServerState>,
-    _session: RequireSession,
+    session: RequireSession,
     Path(key): Path<String>,
 ) -> Result<Json<Option<String>>, ApiError> {
-    Ok(Json(limusic_core::commands::settings::get_setting(&state.app, &key).map_err(command_err)?))
+    let scoped = session.scoped(&state);
+    Ok(Json(limusic_core::commands::settings::get_setting(&scoped, &key).map_err(command_err)?))
 }
 
 #[derive(Deserialize)]
@@ -32,11 +34,12 @@ struct ValueBody {
 
 async fn set_setting(
     State(state): State<ServerState>,
-    _session: RequireSession,
+    session: RequireSession,
     Path(key): Path<String>,
     Json(body): Json<ValueBody>,
 ) -> Result<StatusCode, ApiError> {
-    limusic_core::commands::settings::set_setting(&state.app, &key, &body.value)
+    let scoped = session.scoped(&state);
+    limusic_core::commands::settings::set_setting(&scoped, &key, &body.value)
         .map_err(command_err)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -45,8 +48,9 @@ async fn get_stream_clients() -> Json<Vec<String>> {
     Json(limusic_core::commands::settings::get_stream_clients())
 }
 
-async fn clear_caches(State(state): State<ServerState>, _session: RequireSession) -> StatusCode {
-    limusic_core::commands::settings::clear_caches(&state.app);
+async fn clear_caches(State(state): State<ServerState>, session: RequireSession) -> StatusCode {
+    let scoped = session.scoped(&state);
+    limusic_core::commands::settings::clear_caches(&scoped);
     StatusCode::NO_CONTENT
 }
 

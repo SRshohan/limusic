@@ -25,7 +25,7 @@ async fn get_lyrics(
 ) -> Result<Json<Option<Lyrics>>, ApiError> {
     Ok(Json(
         limusic_core::commands::lyrics::get_lyrics(
-            &state.app,
+            &state.shared,
             params.video_id,
             params.title,
             params.artists,
@@ -54,7 +54,7 @@ async fn choose_lyrics_source(
 ) -> Json<Option<Lyrics>> {
     Json(
         limusic_core::commands::lyrics::choose_lyrics_source(
-            &state.app,
+            &state.shared,
             params.video_id,
             params.title,
             params.artists,
@@ -77,11 +77,11 @@ async fn set_lyrics_offset(
     Path(video_id): Path<String>,
     Json(body): Json<OffsetBody>,
 ) {
-    limusic_core::commands::lyrics::set_lyrics_offset(&state.app, &video_id, body.offset_ms);
+    limusic_core::commands::lyrics::set_lyrics_offset(&state.shared, &video_id, body.offset_ms);
 }
 
 async fn lyrics_providers(State(state): State<ServerState>) -> Json<Vec<ProviderInfo>> {
-    Json(limusic_core::commands::lyrics::lyrics_providers(&state.app))
+    Json(limusic_core::commands::lyrics::lyrics_providers(&state.shared))
 }
 
 pub fn router() -> Router<ServerState> {

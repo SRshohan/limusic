@@ -74,7 +74,7 @@ pub struct PoTokenGenerator {
 impl PoTokenGenerator {
     pub fn new(db: Arc<Db>) -> Self {
         let stored: Option<SessionToken> =
-            db.get_setting(SESSION_TOKEN_KEY).and_then(|raw| serde_json::from_str(&raw).ok());
+            db.get_setting(crate::db::GLOBAL_ACCOUNT, SESSION_TOKEN_KEY).and_then(|raw| serde_json::from_str(&raw).ok());
         if let Some(t) = &stored {
             tracing::debug!(
                 expires_in = t.expires_at - now_secs(),
@@ -92,7 +92,7 @@ impl PoTokenGenerator {
     /// Forget the session token, in memory and on disk.
     pub async fn invalidate_session_token(&self) {
         *self.session_token.lock().await = None;
-        self.db.delete_setting(SESSION_TOKEN_KEY);
+        self.db.delete_setting(crate::db::GLOBAL_ACCOUNT, SESSION_TOKEN_KEY);
     }
 
     /// Session token for the `/player` request body. Cheap when cached; otherwise performs the
@@ -238,7 +238,7 @@ impl PoTokenGenerator {
             expires_at: now_secs() + good_for.as_secs() as i64,
         };
         if let Ok(json) = serde_json::to_string(&token) {
-            self.db.set_setting(SESSION_TOKEN_KEY, &json);
+            self.db.set_setting(crate::db::GLOBAL_ACCOUNT, SESSION_TOKEN_KEY, &json);
         }
         *self.session_token.lock().await = Some(token);
     }
@@ -293,11 +293,11 @@ mod tests {
 
         g.store_session_token("vd123", "tok".to_owned(), Duration::from_secs(3600)).await;
         assert_eq!(g.cached_session_token("vd123").await.as_deref(), Some("tok"));
-        assert!(g.db.get_setting(SESSION_TOKEN_KEY).is_some());
+        assert!(g.db.get_setting(crate::db::GLOBAL_ACCOUNT, SESSION_TOKEN_KEY).is_some());
 
         g.invalidate_session_token().await;
         assert_eq!(g.cached_session_token("vd123").await, None);
-        assert_eq!(g.db.get_setting(SESSION_TOKEN_KEY), None);
+        assert_eq!(g.db.get_setting(crate::db::GLOBAL_ACCOUNT, SESSION_TOKEN_KEY), None);
 
         g.store_session_token("vd123", "tok2".to_owned(), Duration::from_secs(3600)).await;
         assert_eq!(g.cached_session_token("vd123").await.as_deref(), Some("tok2"));

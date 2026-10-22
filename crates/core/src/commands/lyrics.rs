@@ -1,11 +1,11 @@
 //! Lyrics commands, ported from `src-tauri/src/commands.rs`'s "lyrics" section — thin wrappers
 //! over `crate::lyrics`, unchanged.
 use crate::lyrics::{Lyrics, LyricsRequest, ProviderInfo};
-use crate::state::AppState;
+use crate::state::Shared;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn get_lyrics(
-    state: &AppState,
+    state: &Shared,
     video_id: String,
     title: String,
     artists: String,
@@ -19,7 +19,7 @@ pub async fn get_lyrics(
 
 #[allow(clippy::too_many_arguments)]
 pub async fn choose_lyrics_source(
-    state: &AppState,
+    state: &Shared,
     video_id: String,
     title: String,
     artists: String,
@@ -31,10 +31,10 @@ pub async fn choose_lyrics_source(
     crate::lyrics::choose_source(state, req, source).await
 }
 
-pub fn set_lyrics_offset(state: &AppState, video_id: &str, offset_ms: i64) {
+pub fn set_lyrics_offset(state: &Shared, video_id: &str, offset_ms: i64) {
     crate::lyrics::set_offset(state, video_id, offset_ms);
 }
 
-pub fn lyrics_providers(state: &AppState) -> Vec<ProviderInfo> {
+pub fn lyrics_providers(state: &Shared) -> Vec<ProviderInfo> {
     crate::lyrics::providers(state)
 }

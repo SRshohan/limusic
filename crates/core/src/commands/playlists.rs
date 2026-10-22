@@ -12,16 +12,16 @@
 //!   HTTP caller has no "local path on the server" to hand over — it has image bytes (a browser
 //!   `File`/`Blob`) — so this version takes those bytes directly and uploads straight to YouTube,
 //!   with no server-side copy or covers directory at all.
-use crate::state::{is_local_playlist, AppState, ON_REPEAT_ID};
+use crate::state::{is_local_playlist, Scoped, ON_REPEAT_ID};
 
 const LIKED_MUSIC_ID: &str = "VLLM";
 
-fn metadata_client(state: &AppState) -> Result<&innertube::YouTubeClient, String> {
-    state.clients.get(innertube::METADATA_CLIENT).ok_or_else(|| "metadata client missing".into())
+fn metadata_client<'a>(state: &'a Scoped<'a>) -> Result<&'a innertube::YouTubeClient, String> {
+    state.clients().get(innertube::METADATA_CLIENT).ok_or_else(|| "metadata client missing".into())
 }
 
 fn editable_playlist<'a>(
-    state: &'a AppState,
+    state: &'a Scoped<'_>,
     playlist_id: &str,
 ) -> Result<&'a innertube::YouTubeClient, String> {
     if playlist_id == ON_REPEAT_ID {
@@ -37,19 +37,19 @@ fn editable_playlist<'a>(
 }
 
 /// Answers the new playlist's id. No `local` option here (desktop-only, see module doc).
-pub async fn create_playlist(state: &AppState, title: &str) -> Result<String, String> {
+pub async fn create_playlist(state: &Scoped<'_>, title: &str) -> Result<String, String> {
     let client = metadata_client(state)?;
-    state.it.create_playlist(client, title).await.map_err(|e| e.to_string())
+    state.it().create_playlist(client, title).await.map_err(|e| e.to_string())
 }
 
-pub async fn delete_playlist(state: &AppState, playlist_id: &str) -> Result<(), String> {
+pub async fn delete_playlist(state: &Scoped<'_>, playlist_id: &str) -> Result<(), String> {
     let client = editable_playlist(state, playlist_id)?;
-    state.it.delete_playlist(client, playlist_id).await.map_err(|e| e.to_string())
+    state.it().delete_playlist(client, playlist_id).await.map_err(|e| e.to_string())
 }
 
 /// Each field is `None` when the caller left it alone, and only what changed is sent.
 pub async fn edit_playlist_details(
-    state: &AppState,
+    state: &Scoped<'_>,
     playlist_id: &str,
     name: Option<&str>,
     description: Option<&str>,
@@ -59,7 +59,7 @@ pub async fn edit_playlist_details(
     // The switch is two-state; YouTube's third value (UNLISTED) is only ever left as it was.
     let privacy = public.map(|p| if p { "PUBLIC" } else { "PRIVATE" });
     state
-        .it
+        .it()
         .playlist_edit_details(client, playlist_id, name, description, privacy)
         .await
         .map_err(|e| e.to_string())
@@ -82,17 +82,17 @@ const MAX_COVER_BYTES: usize = 8 * 1024 * 1024;
 /// `image = None` clears the cover, answering the thumbnail YouTube rebuilt in its place.
 /// `image = Some(bytes)` uploads it directly — no local copy, no covers directory (see module doc).
 pub async fn set_playlist_cover(
-    state: &AppState,
+    state: &Scoped<'_>,
     playlist_id: &str,
     image: Option<Vec<u8>>,
 ) -> Result<Option<String>, String> {
     let Some(bytes) = image else {
-        if playlist_id == ON_REPEAT_ID || is_local_playlist(playlist_id) || !state.it.is_logged_in()
+        if playlist_id == ON_REPEAT_ID || is_local_playlist(playlist_id) || !state.it().is_logged_in()
         {
             return Ok(None);
         }
         let client = metadata_client(state)?;
-        return state.it.playlist_clear_cover(client, playlist_id).await.map_err(|e| e.to_string());
+        return state.it().playlist_clear_cover(client, playlist_id).await.map_err(|e| e.to_string());
     };
     if bytes.len() > MAX_COVER_BYTES {
         return Err("That image is over 8 MB. Pick a smaller one.".into());
@@ -101,49 +101,49 @@ pub async fn set_playlist_cover(
         return Err("Pick a JPEG or PNG image: YouTube Music won't take anything else.".into());
     }
     let client = editable_playlist(state, playlist_id)?;
-    state.it.playlist_set_cover(client, playlist_id, bytes).await.map_err(|e| e.to_string())?;
+    state.it().playlist_set_cover(client, playlist_id, bytes).await.map_err(|e| e.to_string())?;
     Ok(None)
 }
 
 pub async fn add_to_playlist(
-    state: &AppState,
+    state: &Scoped<'_>,
     playlist_id: &str,
     video_id: &str,
     allow_duplicates: bool,
 ) -> Result<bool, String> {
     let client = editable_playlist(state, playlist_id)?;
-    state.it.playlist_add(client, playlist_id, video_id, allow_duplicates).await.map_err(|e| e.to_string())
+    state.it().playlist_add(client, playlist_id, video_id, allow_duplicates).await.map_err(|e| e.to_string())
 }
 
 pub async fn remove_from_playlist(
-    state: &AppState,
+    state: &Scoped<'_>,
     playlist_id: &str,
     video_id: &str,
     set_video_id: &str,
 ) -> Result<(), String> {
     let client = editable_playlist(state, playlist_id)?;
-    state.it.playlist_remove(client, playlist_id, video_id, set_video_id).await.map_err(|e| e.to_string())
+    state.it().playlist_remove(client, playlist_id, video_id, set_video_id).await.map_err(|e| e.to_string())
 }
 
 /// All or nothing: YouTube applies the whole action list or rejects it, so the caller can revert
 /// an optimistic removal on an error without working out which rows made it.
 pub async fn remove_many_from_playlist(
-    state: &AppState,
+    state: &Scoped<'_>,
     playlist_id: &str,
     tracks: &[(String, String)],
 ) -> Result<(), String> {
     let client = editable_playlist(state, playlist_id)?;
-    state.it.playlist_remove_many(client, playlist_id, tracks).await.map_err(|e| e.to_string())
+    state.it().playlist_remove_many(client, playlist_id, tracks).await.map_err(|e| e.to_string())
 }
 
 /// Store a sort order on a playlist, so YouTube Music and every other client show it the same way.
 /// Only for a playlist whose `sortMenu.editable` said the options are writes — elsewhere YouTube
 /// answers this with an error.
 pub async fn set_playlist_sort(
-    state: &AppState,
+    state: &Scoped<'_>,
     playlist_id: &str,
     sort: innertube::PlaylistSort,
 ) -> Result<(), String> {
     let client = editable_playlist(state, playlist_id)?;
-    state.it.playlist_set_sort(client, playlist_id, sort).await.map_err(|e| e.to_string())
+    state.it().playlist_set_sort(client, playlist_id, sort).await.map_err(|e| e.to_string())
 }

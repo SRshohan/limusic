@@ -116,7 +116,6 @@ struct Candidate {
 }
 
 pub struct Orchestrator {
-    it: InnerTube,
     clients: Clients,
     cipher: Arc<CipherDeobfuscator>,
     potoken: Arc<PoTokenGenerator>,
@@ -173,14 +172,16 @@ fn blacklist_blocks(map: &HashMap<String, Instant>, video_id: &str, now: Instant
 }
 
 impl Orchestrator {
+    /// openspec/changes/multi-user-isolation: no longer takes an `InnerTube` at construction —
+    /// `it` moves to a per-call parameter on `resolve`/`resolve_video`/`headers_for` instead, so
+    /// one `Orchestrator` (and the one `cipher`/`potoken` runtime behind it) serves every
+    /// concurrently signed-in account.
     pub fn new(
-        it: InnerTube,
         clients: Clients,
         cipher: Arc<CipherDeobfuscator>,
         potoken: Arc<PoTokenGenerator>,
     ) -> Self {
         Orchestrator {
-            it,
             clients,
             cipher,
             potoken,
@@ -225,14 +226,15 @@ impl Orchestrator {
     /// Resolve a videoId to a playable stream. context/06 full algorithm.
     pub async fn resolve(
         &self,
+        it: &InnerTube,
         video_id: &str,
         is_upload: bool,
         quality: AudioQuality,
         disabled: &HashSet<String>,
     ) -> Result<PlaybackData, ResolveError> {
         let prefer_high = matches!(quality, AudioQuality::High | AudioQuality::Auto);
-        let logged_in = self.it.is_logged_in();
-        let visitor = self.it.visitor_data();
+        let logged_in = it.is_logged_in();
+        let visitor = it.visitor_data();
         // An upload only streams to an authenticated client, so it gets its own chain and never
         // falls through to the anonymous ones (context: clients::UPLOAD_FALLBACK_ORDER, issue #71).
         let order: &[&str] =
@@ -267,7 +269,7 @@ impl Orchestrator {
         // 3. Main request as WEB_REMIX (metadata source even when a fallback wins the stream).
         let mut main_resp = match main_client {
             Some(c) if !disabled.contains(MAIN_CLIENT) => {
-                self.it.player(c, video_id, playlist_id, sts, session_pot).await.ok()
+                it.player(c, video_id, playlist_id, sts, session_pot).await.ok()
             }
             _ => None,
         };
@@ -286,7 +288,7 @@ impl Orchestrator {
                 let cc_pot = if cc.use_web_po_tokens { session_pot } else { None };
                 let cc_sts = if cc.use_signature_timestamp { sts } else { None };
                 tracing::info!(video_id, "WEB_REMIX age/login-gated → retrying WEB_CREATOR");
-                if let Ok(r) = self.it.player(cc, video_id, playlist_id, cc_sts, cc_pot).await {
+                if let Ok(r) = it.player(cc, video_id, playlist_id, cc_sts, cc_pot).await {
                     main_resp = Some(r);
                     main_key = "WEB_CREATOR";
                 }
@@ -372,7 +374,7 @@ impl Orchestrator {
                 }
                 let client_sts = if client.use_signature_timestamp { sts } else { None };
                 let answered =
-                    self.it.player(client, video_id, playlist_id, client_sts, client_pot).await;
+                    it.player(client, video_id, playlist_id, client_sts, client_pot).await;
                 reached |= answered.is_ok();
                 match answered {
                     Ok(r) if r.playability_status.is_ok() => (key.to_owned(), r),
@@ -452,7 +454,7 @@ impl Orchestrator {
             // where mpv gets one), because a probe that carries something the real GET does not
             // is not a prediction of anything. Issue #71.
             let headers =
-                stream_headers(client.map(|c| c.user_agent.clone()), self.it.cookie(), is_upload);
+                stream_headers(client.map(|c| c.user_agent.clone()), it.cookie(), is_upload);
             if self.validate_stream(&url, &headers, content_length(format)).await {
                 let ping = main_ping.clone().or_else(|| playback_ping(&resp, &key));
                 return Ok(self.build(
@@ -496,7 +498,7 @@ impl Orchestrator {
 
         // 6. HIGH wanted but only a non-HIGH found → use the remembered best.
         if let Some(c) = best {
-            let headers = self.headers_for(&c.client, is_upload);
+            let headers = self.headers_for(it, &c.client, is_upload);
             return Ok(self.build(
                 video_id,
                 &c.format,
@@ -519,7 +521,7 @@ impl Orchestrator {
             // machine stuck on a rejected PoToken or a stale cipher can get itself out; without
             // this an upload-only failure had no route back at all.
             self.self_heal();
-            let headers = self.headers_for(&c.client, is_upload);
+            let headers = self.headers_for(it, &c.client, is_upload);
             return Ok(self.build(
                 video_id,
                 &c.format,
@@ -588,6 +590,7 @@ impl Orchestrator {
     /// failed ([`mark_video_failed`](Self::mark_video_failed)).
     pub async fn resolve_video(
         &self,
+        it: &InnerTube,
         video_id: &str,
         max_height: i32,
         disabled: &HashSet<String>,
@@ -603,9 +606,9 @@ impl Orchestrator {
                 continue;
             }
             let url = if key == MAIN_CLIENT {
-                self.web_remix_video(video_id, max_height).await
+                self.web_remix_video(it, video_id, max_height).await
             } else {
-                self.direct_video(key, video_id, max_height).await
+                self.direct_video(it, key, video_id, max_height).await
             };
             if let Some(url) = url {
                 tracing::debug!(video_id, client = key, "video: resolved");
@@ -635,9 +638,9 @@ impl Orchestrator {
     /// probe, because googlevideo caps some WEB_REMIX URLs at their first ~768 KiB
     /// (`validate_stream`). The probe sends no headers since neither proxy does, and googlevideo
     /// was measured to serve these URLs without a User-Agent or cookie.
-    async fn web_remix_video(&self, video_id: &str, max_height: i32) -> Option<String> {
+    async fn web_remix_video(&self, it: &InnerTube, video_id: &str, max_height: i32) -> Option<String> {
         let client = self.clients.get(MAIN_CLIENT)?;
-        let visitor = self.it.visitor_data();
+        let visitor = it.visitor_data();
         let kept = self.video_replies.lock().ok().and_then(|mut m| m.remove(video_id));
         let sd = match kept.filter(|(until, _)| *until > Instant::now()) {
             Some((_, sd)) => sd,
@@ -648,7 +651,7 @@ impl Orchestrator {
                     None => None,
                 };
                 let resp =
-                    self.it.player(client, video_id, None, sts, pot.as_deref()).await.ok()?;
+                    it.player(client, video_id, None, sts, pot.as_deref()).await.ok()?;
                 if !resp.playability_status.is_ok() {
                     tracing::debug!(video_id, status = %resp.playability_status.status, "video: WEB_REMIX not OK");
                     return None;
@@ -670,9 +673,9 @@ impl Orchestrator {
     ///
     /// Not ANDROID_VR: its video URLs are capped at the first mebibyte like its audio ones (issue
     /// #292), so it could only ever hand the view a stream that dies mid-clip.
-    async fn direct_video(&self, key: &str, video_id: &str, max_height: i32) -> Option<String> {
+    async fn direct_video(&self, it: &InnerTube, key: &str, video_id: &str, max_height: i32) -> Option<String> {
         let client = self.clients.get(key)?;
-        let resp = match self.it.player(client, video_id, None, None, None).await {
+        let resp = match it.player(client, video_id, None, None, None).await {
             Ok(r) => r,
             Err(e) => {
                 tracing::debug!(video_id, client = key, error = %e, "video: /player failed");
@@ -786,10 +789,10 @@ impl Orchestrator {
 
     /// [`stream_headers`] for a client registry key. `pub(crate)` because a cache hit skips the
     /// resolve and has to rebuild the same headers from the client it recorded.
-    pub(crate) fn headers_for(&self, client: &str, is_upload: bool) -> HashMap<String, String> {
+    pub(crate) fn headers_for(&self, it: &InnerTube, client: &str, is_upload: bool) -> HashMap<String, String> {
         stream_headers(
             self.clients.get(client).map(|c| c.user_agent.clone()),
-            self.it.cookie(),
+            it.cookie(),
             is_upload,
         )
     }
@@ -1114,13 +1117,13 @@ mod live {
             crate::db::Db::open(std::path::Path::new(":memory:")).unwrap(),
         )));
         let it = InnerTube::new(Session::default(), None).expect("innertube client");
-        let orchestrator = Orchestrator::new(it, Clients::bundled(), cipher, potoken);
+        let orchestrator = Orchestrator::new(Clients::bundled(), cipher, potoken);
 
         let video_id = "dQw4w9WgXcQ";
         let disabled = HashSet::new();
 
         let first = orchestrator
-            .resolve(video_id, false, AudioQuality::Auto, &disabled)
+            .resolve(&it, video_id, false, AudioQuality::Auto, &disabled)
             .await
             .expect("first resolve");
         println!("first resolve: client={} itag={}", first.stream_client, first.itag);
@@ -1131,7 +1134,7 @@ mod live {
         orchestrator.teardown_idle_resources(Duration::from_secs(0)).await;
 
         let second = orchestrator
-            .resolve(video_id, false, AudioQuality::Auto, &disabled)
+            .resolve(&it, video_id, false, AudioQuality::Auto, &disabled)
             .await
             .expect("second resolve, after a forced idle teardown");
         println!("second resolve: client={} itag={}", second.stream_client, second.itag);

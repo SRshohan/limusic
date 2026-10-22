@@ -1,5 +1,11 @@
 //! Account/session state, trimmed from src-tauri's `AppState` (openspec/changes/
 //! signed-in-http-parity). context/11.
+//!
+//! openspec/changes/multi-user-isolation split this into two: `Shared` (process-wide — cipher,
+//! PoToken, the orchestrator, the `Clients` table, the one `Db` handle — none of it tied to a
+//! login) and `AccountSession` (one per concurrently signed-in account: its own `InnerTube` cookie
+//! jar, its own auth-transition lock, and every method that used to assume there was only ever one
+//! of either).
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
@@ -9,7 +15,7 @@ use std::sync::Arc;
 
 use innertube::{AccountIdentity, AccountInfo, AudioQuality, Clients, InnerTube};
 
-use crate::db::{now_secs, Db, StoredAccount};
+use crate::db::{now_secs, Db, StoredAccount, GLOBAL_ACCOUNT};
 
 /// Synthetic browseId for the On Repeat playlist. Not a YouTube id: `get_playlist` intercepts it
 /// and builds the page from local play counts, so it must never collide with a real browseId
@@ -29,30 +35,90 @@ pub fn is_local_playlist(id: &str) -> bool {
     id.starts_with(LOCAL_PLAYLIST_PREFIX)
 }
 
-// Trimmed fork of src-tauri's `AppState` (openspec/changes/signed-in-http-parity design.md):
-// dropped `player`/`app`/`orchestrator`/`lt`/`cache_dir`/`media`/`discord`/`rate_epoch` and every
-// playback/queue/OS-media-control field (`queue`, `generation`, `pending_seek`, `history_pinged`,
-// `is_playing`, `latest_position`, `last_pos_persist`, `last_media_push`, `last_media_state`,
-// `video_urls`, `last_queue_fingerprint`, `last_persisted_fingerprint`) — none reachable from any
-// capability this crate serves.
-pub struct AppState {
-    pub it: InnerTube,
+/// Process-wide state, shared by every concurrently signed-in account (openspec/changes/
+/// multi-user-isolation). None of this is tied to a login: the cipher/PoToken runtimes decode
+/// YouTube's public player.js and mint anonymous bot-attestation tokens respectively, the
+/// orchestrator takes an `&InnerTube` per call instead of owning one, and the one `Db` handle's
+/// account-scoped tables are scoped by the caller's `account_key`, not by which `Shared` they came
+/// through (there is only ever one `Shared`).
+pub struct Shared {
     pub clients: Clients,
     pub db: Arc<Db>,
     /// Replaces `AppHandle::emit` — see `crate::events`.
     pub events: crate::events::Broadcaster,
     /// Last.fm scrobbler. Same feed again; parks until a session key is set (titlebar button).
     pub lastfm: crate::lastfm::LastfmHandle,
-    /// Stream resolution (cipher/PoToken/client-fallback pipeline) — re-added by
-    /// openspec/changes/http-audio-streaming, reversing this file's own note above that dropped it
-    /// (it "only matter[s] once streaming exists").
+    /// Stream resolution (cipher/PoToken/client-fallback pipeline).
     pub orchestrator: Arc<crate::media::orchestrator::Orchestrator>,
-    /// One authentication transition at a time: [`Self::sign_in`], [`Self::switch_account`],
-    /// [`Self::sign_out`]. Each reads the cookie and identity, awaits YouTube, then writes both to
-    /// the transport and the database, so two of them overlapping lets the loser land last and
-    /// win: a failed heal restoring its stale snapshot over a fresh login, or a heal completing
-    /// after the user signed out and putting them back in. Async because it is held across those
-    /// awaits, which a std `Mutex` cannot be.
+    /// The one `InnerTube` every anonymous route (browse, search, an unauthenticated media
+    /// resolve) uses — never signed in, shared the same way `cipher`/`potoken` are, for the same
+    /// reason: nothing about an anonymous lookup is account-specific.
+    pub anonymous_it: InnerTube,
+}
+
+impl Shared {
+    /// `app_data_dir` is where the cipher caches `player.js` and its config registry snapshot
+    /// (`crates/core/src/cipher/{fetcher,config}.rs`) — the server's equivalent of the desktop
+    /// app's app-data directory, not reused for anything else here.
+    pub fn new(
+        clients: Clients,
+        db: Arc<Db>,
+        lastfm: crate::lastfm::LastfmHandle,
+        app_data_dir: &std::path::Path,
+    ) -> Self {
+        let config = Arc::new(crate::cipher::PlayerConfigStore::new(app_data_dir));
+        let cipher = Arc::new(crate::cipher::CipherDeobfuscator::new(app_data_dir, config));
+        let potoken = Arc::new(crate::potoken::PoTokenGenerator::new(db.clone()));
+        let orchestrator =
+            Arc::new(crate::media::orchestrator::Orchestrator::new(clients.clone(), cipher, potoken));
+        let anonymous_it = InnerTube::new(innertube::Session::default(), None)
+            .expect("failed to build the anonymous InnerTube client");
+        Shared {
+            clients,
+            db,
+            events: crate::events::Broadcaster::default(),
+            lastfm,
+            orchestrator,
+            anonymous_it,
+        }
+    }
+
+    /// The stored `quality` setting for `account_id` (`GLOBAL_ACCOUNT` for an anonymous caller),
+    /// same mapping as the desktop app's own `AppState::quality`.
+    pub fn quality(&self, account_id: &str) -> AudioQuality {
+        match self.db.get_setting(account_id, "quality").as_deref() {
+            Some("LOW") => AudioQuality::Low,
+            Some("AUTO") => AudioQuality::Auto,
+            _ => AudioQuality::High,
+        }
+    }
+
+    /// User-disabled stream clients for `account_id` — same comma-separated
+    /// `disabled_stream_clients` setting and `LIMUSIC_DISABLED_CLIENTS` env override as the
+    /// desktop app's own `AppState::disabled_clients`.
+    pub fn disabled_clients(&self, account_id: &str) -> HashSet<String> {
+        let raw = std::env::var("LIMUSIC_DISABLED_CLIENTS")
+            .ok()
+            .or_else(|| self.db.get_setting(account_id, "disabled_stream_clients"))
+            .unwrap_or_default();
+        raw.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    }
+}
+
+/// One concurrently signed-in account (openspec/changes/multi-user-isolation): its own YouTube
+/// session and its own "one auth transition at a time" lock, looked up by `account_key` from the
+/// calling session's cookie (`crates/server/src/session.rs`). Every `self.db.*` call below passes
+/// `self.account_key` as the scope, so two different accounts' settings/history never collide.
+pub struct AccountSession {
+    pub it: InnerTube,
+    pub account_key: String,
+    /// One authentication transition at a time *for this account*: [`Self::sign_in`] (healing),
+    /// [`Self::switch_account`], [`Self::sign_out`]. Each reads the cookie and identity, awaits
+    /// YouTube, then writes both to the transport and the database, so two of them overlapping
+    /// lets the loser land last and win. Async because it is held across those awaits, which a
+    /// std `Mutex` cannot be. Scoped to this one account now, not the whole process: a slow auth
+    /// transition on one account no longer blocks every other concurrently signed-in account's own
+    /// transitions.
     auth: tokio::sync::Mutex<()>,
 }
 
@@ -136,13 +202,13 @@ impl SelectedIdentity {
     }
 }
 
-fn selected_identity_from_db(db: &Db) -> Option<SelectedIdentity> {
-    db.get_setting("selected_identity_json")
+fn selected_identity_from_db(db: &Db, scope: &str) -> Option<SelectedIdentity> {
+    db.get_setting(scope, "selected_identity_json")
         .and_then(|json| serde_json::from_str::<SelectedIdentity>(&json).ok())
         .filter(|identity| identity.name.is_some() || identity.data_sync_id.is_some())
         .or_else(|| {
             let account = db
-                .get_setting("account_json")
+                .get_setting(scope, "account_json")
                 .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())?;
             let string = |key: &str| {
                 account
@@ -152,7 +218,7 @@ fn selected_identity_from_db(db: &Db) -> Option<SelectedIdentity> {
                     .map(str::to_owned)
             };
             Some(SelectedIdentity {
-                data_sync_id: db.get_setting("data_sync_id").filter(|id| !id.is_empty()),
+                data_sync_id: db.get_setting(scope, "data_sync_id").filter(|id| !id.is_empty()),
                 name: string("name"),
                 handle: string("handle"),
                 email: string("email"),
@@ -169,15 +235,8 @@ fn selected_identity_from_db(db: &Db) -> Option<SelectedIdentity> {
         })
 }
 
-fn auth_selection_pending(db: &Db) -> bool {
-    db.get_setting("account_selection_pending").as_deref() == Some("true")
-}
-
-/// Startup compatibility: prefer the canonical model, then fall back to the pre-switcher setting.
-pub(crate) fn persisted_data_sync_id(db: &Db) -> Option<String> {
-    selected_identity_from_db(db)
-        .and_then(|identity| identity.data_sync_id)
-        .or_else(|| db.get_setting("data_sync_id").filter(|id| !id.is_empty()))
+fn auth_selection_pending(db: &Db, scope: &str) -> bool {
+    db.get_setting(scope, "account_selection_pending").as_deref() == Some("true")
 }
 
 fn identity_selection_key(data_sync_id: &str) -> String {
@@ -198,149 +257,90 @@ fn identity_snapshot(identity: &AccountIdentity, selected: bool) -> serde_json::
         "selected": selected,
     })
 }
-impl AppState {
-    /// `app_data_dir` is where the cipher caches `player.js` and its config registry snapshot
-    /// (`crates/core/src/cipher/{fetcher,config}.rs`) — the server's equivalent of the desktop
-    /// app's app-data directory, not reused for anything else here.
-    pub fn new(
-        it: InnerTube,
-        clients: Clients,
-        db: Arc<Db>,
-        lastfm: crate::lastfm::LastfmHandle,
-        app_data_dir: &std::path::Path,
-    ) -> Self {
-        let config = Arc::new(crate::cipher::PlayerConfigStore::new(app_data_dir));
-        let cipher = Arc::new(crate::cipher::CipherDeobfuscator::new(app_data_dir, config));
-        let potoken = Arc::new(crate::potoken::PoTokenGenerator::new(db.clone()));
-        let orchestrator = Arc::new(crate::media::orchestrator::Orchestrator::new(
-            it.clone(),
-            clients.clone(),
-            cipher,
-            potoken,
-        ));
-        AppState {
-            it,
-            clients,
-            db,
-            events: crate::events::Broadcaster::default(),
-            lastfm,
-            orchestrator,
+
+impl AccountSession {
+    /// A session with no live login yet — the starting point for a brand-new `account_key` the
+    /// moment it's first seen (`ServerState`'s get-or-create), before anyone has signed in as it.
+    pub fn anonymous(account_key: String) -> Self {
+        AccountSession {
+            it: InnerTube::new(innertube::Session::default(), None)
+                .expect("failed to build InnerTube client"),
+            account_key,
             auth: tokio::sync::Mutex::default(),
         }
     }
 
-    // --- stream resolution (openspec/changes/http-audio-streaming) --------------------------
-
-    /// The stored `quality` setting, same mapping as the desktop app's own `AppState::quality`.
-    pub fn quality(&self) -> AudioQuality {
-        match self.db.get_setting("quality").as_deref() {
-            Some("LOW") => AudioQuality::Low,
-            Some("AUTO") => AudioQuality::Auto,
-            _ => AudioQuality::High,
-        }
-    }
-
-    /// User-disabled stream clients — same comma-separated `disabled_stream_clients` setting and
-    /// `LIMUSIC_DISABLED_CLIENTS` env override as the desktop app's own `AppState::disabled_clients`.
-    pub fn disabled_clients(&self) -> HashSet<String> {
-        let raw = std::env::var("LIMUSIC_DISABLED_CLIENTS")
-            .ok()
-            .or_else(|| self.db.get_setting("disabled_stream_clients"))
-            .unwrap_or_default();
-        raw.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
-    }
-
     // --- auth (context/15) ------------------------------------------------------------------
 
-    /// Sign in with the Cookie header captured from the login webview (context/15 Path A).
-    ///
-    /// `account_menu` validates the cookie and provides the active header. `accounts_list` then
-    /// discovers every server-selectable identity. A persisted matching identity wins over
-    /// Google's current default; a new multi-channel login pauses before finalization and asks the
-    /// UI to choose.
+    /// Sign in with the Cookie header captured from the login webview (context/15 Path A), or
+    /// (the web build's only login path) pasted directly. Builds a *fresh* `InnerTube` rather
+    /// than mutating this account's existing one in place: the account_key isn't known until the
+    /// cookie is read, so there's no existing session to safely mutate until this succeeds.
     /// `expect_account` is the SAPISID the caller read before it went off to fetch `cookie`. The
     /// session heal needs it: the user can switch accounts while it exports the jar, and signing
     /// in with what it found would drag them back to the account they just left.
     pub async fn sign_in(
-        &self,
+        shared: &Shared,
         cookie: String,
         expect_account: Option<&str>,
-    ) -> Result<SignInOutcome, String> {
-        // Validating a cookie already in hand: a 401 here is the answer, not something to wait on
-        // a heal for. `refresh_session` also reaches `sign_in` while healing, and a wait there
-        // would park the healing task on the heal it is performing, holding `auth` for the whole
-        // timeout.
-        innertube::without_healing(self.sign_in_inner(cookie, expect_account)).await
+    ) -> Result<(AccountSession, SignInOutcome), String> {
+        innertube::without_healing(Self::sign_in_inner(shared, cookie, expect_account)).await
     }
 
     async fn sign_in_inner(
-        &self,
+        shared: &Shared,
         cookie: String,
         expect_account: Option<&str>,
-    ) -> Result<SignInOutcome, String> {
-        let _turn = self.auth.lock().await;
+    ) -> Result<(AccountSession, SignInOutcome), String> {
+        let cookie = cookie.trim().to_owned();
+        let Some(sapisid) = innertube::cookie_sapisid(&cookie) else {
+            return Err("Sign-in didn't complete — try signing in again.".into());
+        };
         if let Some(expect) = expect_account {
-            let live = self.it.cookie().unwrap_or_default();
-            if innertube::cookie_sapisid(&live) != Some(expect) {
+            if sapisid != expect {
                 return Err("The active account changed — skipping this sign-in.".into());
             }
         }
-        let cookie = cookie.trim().to_owned();
-        if innertube::cookie_sapisid(&cookie).is_none() {
+        let Some(account_key) = crate::db::account_key(&cookie) else {
             return Err("Sign-in didn't complete — try signing in again.".into());
-        }
-        let previous_cookie = self.it.cookie();
-        let previous_data_sync_id = self.it.data_sync_id();
-        let persisted_identity = selected_identity_from_db(&self.db);
+        };
+        let it = InnerTube::new(innertube::Session::default(), None)
+            .map_err(|e| format!("Sign-in failed: {e}"))?;
+        // No `auth` lock needed here: this `AccountSession` is a fresh, not-yet-shared local value
+        // until this function returns it — nothing else could be racing on it. The lock exists for
+        // the methods below that run against an *already-published* `&self` session.
+        let session = AccountSession { it, account_key, auth: tokio::sync::Mutex::default() };
+
+        // A persisted choice for THIS account (if this cookie belongs to one we've seen before)
+        // takes priority over whatever channel Google defaults to today.
+        let persisted_identity = selected_identity_from_db(&shared.db, &session.account_key);
         let persisted_id = persisted_identity
             .as_ref()
             .and_then(|identity| identity.data_sync_id.clone())
-            .or_else(|| self.db.get_setting("data_sync_id").filter(|id| !id.is_empty()));
+            .or_else(|| {
+                shared.db.get_setting(&session.account_key, "data_sync_id").filter(|id| !id.is_empty())
+            });
 
-        self.it.set_cookie(Some(cookie.clone()));
-        // Discovery must not inherit a stale/default identity. The persisted id is restored only
-        // after the fresh accounts list proves that this cookie can act as it.
-        self.it.set_data_sync_id(None);
+        session.it.set_cookie(Some(cookie.clone()));
         let client =
-            self.clients.get(innertube::METADATA_CLIENT).ok_or("metadata client missing")?;
-        let active = match self.it.account_menu(client).await {
-            // A valid, authenticating cookie returns the account header (name). No name means the
-            // session didn't actually authenticate — reject it up front so we don't "succeed" into
-            // a silently-empty library.
+            shared.clients.get(innertube::METADATA_CLIENT).ok_or("metadata client missing")?;
+        let active = match session.it.account_menu(client).await {
             Ok(i) if i.name.is_some() => i,
-            Ok(_) => {
-                self.restore_auth_transport(previous_cookie, previous_data_sync_id);
-                return Err("That session didn't authenticate — sign in again.".into());
-            }
-            // Auth didn't take (network) — roll back so we're not half-logged-in.
-            Err(e) => {
-                self.restore_auth_transport(previous_cookie, previous_data_sync_id);
-                return Err(format!("Sign-in failed: {e}"));
-            }
+            Ok(_) => return Err("That session didn't authenticate — sign in again.".into()),
+            Err(e) => return Err(format!("Sign-in failed: {e}")),
         };
 
         let active_visitor_data = active.visitor_data.clone();
-
-        // Discovery must go out with the login-bound visitorData account_menu just handed us, not
-        // the anonymous bootstrap id still sitting in the session: pairing that id with login
-        // cookies is what gets accounts_list rejected, and a rejected list reads below as "this
-        // Google account has one channel". Every success path persists this same value; hand the
-        // old one back until then so a rolled-back sign-in isn't left holding it.
-        let previous_visitor_data = self.it.visitor_data();
         if active_visitor_data.is_some() {
-            self.it.set_visitor_data(active_visitor_data.clone());
+            session.it.set_visitor_data(active_visitor_data.clone());
         }
-        // Losing the list endpoint must not regress ordinary one-channel sign-in. It only removes
-        // the optional switcher for this login attempt; account_menu still supplies a valid active
-        // identity exactly as older releases used it.
-        let identities = match self.it.account_identities(client).await {
+        let identities = match session.it.account_identities(client).await {
             Ok(identities) => identities,
             Err(error) => {
                 tracing::warn!(%error, "could not discover alternate YouTube identities");
                 Vec::new()
             }
         };
-        self.it.set_visitor_data(previous_visitor_data);
 
         let chosen = persisted_id
             .as_deref()
@@ -348,36 +348,15 @@ impl AppState {
         if let Some(identity) = chosen {
             if identities.len() == 1 {
                 let selected = SelectedIdentity::from_identity(identity, active, false);
-                self.persist_selected_identity(selected, active_visitor_data.as_deref())
-                    .inspect_err(|_| {
-                        self.restore_auth_transport(
-                            previous_cookie.clone(),
-                            previous_data_sync_id.clone(),
-                        );
-                        self.restore_session_cookie_setting(previous_cookie.as_deref());
-                    })?;
-                return Ok(SignInOutcome::Complete);
+                session.persist_selected_identity(shared, selected, active_visitor_data.as_deref())?;
+                return Ok((session, SignInOutcome::Complete));
             }
-            self.activate_identity(identity, identities.len() > 1, client).await.inspect_err(
-                |_| {
-                    self.restore_auth_transport(
-                        previous_cookie.clone(),
-                        previous_data_sync_id.clone(),
-                    );
-                    self.restore_session_cookie_setting(previous_cookie.as_deref());
-                },
-            )?;
-            return Ok(SignInOutcome::Complete);
+            session
+                .activate_identity(shared, identity, identities.len() > 1, client)
+                .await?;
+            return Ok((session, SignInOutcome::Complete));
         }
 
-        // A missing/unreadable list must not replace a previously selected channel with Google's
-        // current default. Revalidate the stored server-issued id directly; account_menu either
-        // confirms it and refreshes metadata, or the login fails closed.
-        //
-        // Only when the list is empty. A list that came back and does *not* contain the persisted
-        // id means these cookies belong to a different Google account, so the stored id is theirs
-        // to drop: forcing it here would delegate account A's channel onto account B's cookie and
-        // fail every sign-in until the user signs out first.
         if identities.is_empty() {
             if let Some(data_sync_id) = persisted_id.as_deref() {
                 let identity = persisted_identity
@@ -392,83 +371,61 @@ impl AppState {
                         data_sync_id: data_sync_id.to_owned(),
                         is_selected: false,
                     });
-                self.activate_identity(
-                    &identity,
-                    persisted_identity.as_ref().is_some_and(|saved| saved.has_multiple_identities),
-                    client,
-                )
-                .await
-                .inspect_err(|_| {
-                    self.restore_auth_transport(
-                        previous_cookie.clone(),
-                        previous_data_sync_id.clone(),
-                    );
-                    self.restore_session_cookie_setting(previous_cookie.as_deref());
-                })?;
-                return Ok(SignInOutcome::Complete);
+                session
+                    .activate_identity(
+                        shared,
+                        &identity,
+                        persisted_identity
+                            .as_ref()
+                            .is_some_and(|saved| saved.has_multiple_identities),
+                        client,
+                    )
+                    .await?;
+                return Ok((session, SignInOutcome::Complete));
             }
         }
 
         if identities.len() == 1 {
-            // One channel stays seamless. Reuse the already-fetched active header instead of
-            // introducing another network request or a new delegated id into the historical
-            // single-account path.
             let selected = SelectedIdentity::from_account_info(active, false)
                 .ok_or("That session didn't return an account identity")?;
-            self.persist_selected_identity(selected, active_visitor_data.as_deref()).inspect_err(
-                |_| {
-                    self.restore_auth_transport(
-                        previous_cookie.clone(),
-                        previous_data_sync_id.clone(),
-                    );
-                    self.restore_session_cookie_setting(previous_cookie.as_deref());
-                },
-            )?;
-            return Ok(SignInOutcome::Complete);
+            session.persist_selected_identity(shared, selected, active_visitor_data.as_deref())?;
+            return Ok((session, SignInOutcome::Complete));
         }
 
         if identities.len() > 1 {
             // No persisted choice for these cookies: atomically keep the authenticated cookie,
             // mark the login unfinished, and remove stale projections. A restart will reopen the
             // required picker instead of silently acting as YouTube's default channel.
-            self.it.set_data_sync_id(None);
-            self.db.set_pending_auth_selection(&cookie, None).map_err(|error| {
-                self.restore_auth_transport(previous_cookie.clone(), previous_data_sync_id.clone());
-                self.restore_session_cookie_setting(previous_cookie.as_deref());
-                error.to_string()
-            })?;
-            self.persist_visitor_data(active_visitor_data.as_deref());
-            self.sync_active_account();
-            let _ = self.events.emit("account-selection-required", ());
-            return Ok(SignInOutcome::SelectionRequired);
+            session.it.set_data_sync_id(None);
+            shared
+                .db
+                .set_pending_auth_selection(&session.account_key, &cookie)
+                .map_err(|e| e.to_string())?;
+            session.persist_visitor_data(shared, active_visitor_data.as_deref());
+            session.sync_active_account(shared);
+            let _ = shared.events.emit("account-selection-required", ());
+            return Ok((session, SignInOutcome::SelectionRequired));
         }
 
         // No selectable token was exposed (the normal historical single-channel response). Keep
         // the seamless path and persist the active header + response-context dataSyncId together.
         let selected = SelectedIdentity::from_account_info(active, false)
             .ok_or("That session didn't return an account identity")?;
-        self.persist_selected_identity(selected, active_visitor_data.as_deref()).inspect_err(
-            |_| {
-                self.restore_auth_transport(previous_cookie.clone(), previous_data_sync_id.clone());
-                self.restore_session_cookie_setting(previous_cookie.as_deref());
-            },
-        )?;
-        Ok(SignInOutcome::Complete)
+        session.persist_selected_identity(shared, selected, active_visitor_data.as_deref())?;
+        Ok((session, SignInOutcome::Complete))
     }
 
-    /// Fresh switcher rows for the account picker. Raw delegated ids never cross the Tauri
+    /// Fresh switcher rows for the account picker. Raw delegated ids never cross the HTTP
     /// boundary; the UI receives a process-local opaque selector and display metadata only.
-    pub async fn account_identities(&self) -> Result<Vec<serde_json::Value>, String> {
+    pub async fn account_identities(&self, shared: &Shared) -> Result<Vec<serde_json::Value>, String> {
         if !self.it.is_logged_in() {
             return Err("Sign in before switching channels.".into());
         }
         let client =
-            self.clients.get(innertube::METADATA_CLIENT).ok_or("metadata client missing")?;
+            shared.clients.get(innertube::METADATA_CLIENT).ok_or("metadata client missing")?;
         let identities = self.it.account_identities(client).await.map_err(|e| e.to_string())?;
         let selected_id = self.it.data_sync_id();
-        // Nothing is selected yet during a forced first pick, so YouTube's own default marker
-        // would be a lie: the user hasn't chosen it, and picking it is still a required step.
-        let pending = auth_selection_pending(&self.db);
+        let pending = auth_selection_pending(&shared.db, &self.account_key);
         Ok(identities
             .iter()
             .map(|identity| {
@@ -482,21 +439,28 @@ impl AppState {
             .collect())
     }
 
-    /// Switch without a Google re-login. The selector is resolved against a fresh server list and
-    /// account_menu must succeed under a one-off context for that exact identity before the shared
-    /// transport, persistence, or UI is updated.
-    pub async fn switch_account(&self, selection_key: &str) -> Result<serde_json::Value, String> {
-        // Same as `sign_in`: this validates an identity it was handed, so let it hear the answer.
-        innertube::without_healing(self.switch_account_inner(selection_key)).await
+    /// Switch without a Google re-login, between channels *of this same account*. The selector is
+    /// resolved against a fresh server list and account_menu must succeed under a one-off context
+    /// for that exact identity before this account's transport or persistence is updated.
+    pub async fn switch_account(
+        &self,
+        shared: &Shared,
+        selection_key: &str,
+    ) -> Result<serde_json::Value, String> {
+        innertube::without_healing(self.switch_account_inner(shared, selection_key)).await
     }
 
-    async fn switch_account_inner(&self, selection_key: &str) -> Result<serde_json::Value, String> {
+    async fn switch_account_inner(
+        &self,
+        shared: &Shared,
+        selection_key: &str,
+    ) -> Result<serde_json::Value, String> {
         let _turn = self.auth.lock().await;
         if !self.it.is_logged_in() {
             return Err("Sign in before switching channels.".into());
         }
         let client =
-            self.clients.get(innertube::METADATA_CLIENT).ok_or("metadata client missing")?;
+            shared.clients.get(innertube::METADATA_CLIENT).ok_or("metadata client missing")?;
         let identities = self.it.account_identities(client).await.map_err(|e| e.to_string())?;
         let identity = identities
             .iter()
@@ -504,11 +468,12 @@ impl AppState {
             .ok_or(
                 "That YouTube channel is no longer available. Refresh the list and try again.",
             )?;
-        self.activate_identity(identity, identities.len() > 1, client).await
+        self.activate_identity(shared, identity, identities.len() > 1, client).await
     }
 
     async fn activate_identity(
         &self,
+        shared: &Shared,
         identity: &AccountIdentity,
         has_multiple_identities: bool,
         client: &innertube::YouTubeClient,
@@ -528,13 +493,14 @@ impl AppState {
         let visitor_data = refreshed.visitor_data.clone();
         let selected =
             SelectedIdentity::from_identity(identity, refreshed, has_multiple_identities);
-        self.persist_selected_identity(selected, visitor_data.as_deref())
+        self.persist_selected_identity(shared, selected, visitor_data.as_deref())
     }
 
     /// Persist a freshly picked channel: the canonical selected identity, its projections, and the
     /// visitorData, then refresh the saved account row and the transport to match. context/15.
     fn persist_selected_identity(
         &self,
+        shared: &Shared,
         selected: SelectedIdentity,
         visitor_data: Option<&str>,
     ) -> Result<serde_json::Value, String> {
@@ -545,242 +511,122 @@ impl AppState {
             .it
             .cookie()
             .ok_or("The YouTube session expired before the channel could be saved.")?;
-        self.db
+        shared
+            .db
             .set_auth_identity(
+                &self.account_key,
                 &session_cookie,
                 &selected_json,
                 selected.data_sync_id.as_deref(),
                 &account_json,
             )
             .map_err(|e| format!("Couldn't save the selected YouTube channel: {e}"))?;
-        self.persist_visitor_data(visitor_data);
-        self.sync_active_account();
-        self.forget_playlist_index();
+        self.persist_visitor_data(shared, visitor_data);
+        self.sync_active_account(shared);
+        self.forget_playlist_index(shared);
         self.it.set_data_sync_id(selected.data_sync_id.clone());
-        let _ = self.events.emit("auth-changed", &account);
+        let _ = shared.events.emit("auth-changed", &account);
         Ok(account)
     }
 
     /// The playlist membership index belongs to one account, so a sign-out or a channel switch
     /// empties it. Its timestamp goes too, or the next sync would think it was still fresh.
-    fn forget_playlist_index(&self) {
-        self.db.clear_playlist_index();
-        self.db.delete_setting("playlist_index_synced_at");
+    fn forget_playlist_index(&self, shared: &Shared) {
+        shared.db.clear_playlist_index();
+        shared.db.delete_setting(&self.account_key, "playlist_index_synced_at");
     }
 
-    fn restore_auth_transport(&self, cookie: Option<String>, data_sync_id: Option<String>) {
-        self.it.set_cookie(cookie);
-        self.it.set_data_sync_id(data_sync_id);
-    }
-
-    fn restore_session_cookie_setting(&self, cookie: Option<&str>) {
-        if let Some(cookie) = cookie {
-            self.db.set_setting("session_cookie", cookie);
-        } else {
-            self.db.delete_setting("session_cookie");
-        }
-    }
-
-    fn persist_visitor_data(&self, visitor_data: Option<&str>) {
+    fn persist_visitor_data(&self, shared: &Shared, visitor_data: Option<&str>) {
         if let Some(visitor_data) = visitor_data {
             self.it.set_visitor_data(Some(visitor_data.to_owned()));
-            self.db.set_setting("visitor_data", visitor_data);
+            shared.db.set_setting(&self.account_key, "visitor_data", visitor_data);
         }
     }
 
     /// Sign out: drop to guest. The saved row stays, so the account is still listed and one click
-    /// from coming back. Deleting the credentials is `remove_google_account`, which the menu offers
-    /// as its own action behind a confirm.
-    pub async fn sign_out(&self) {
+    /// from coming back.
+    pub async fn sign_out(&self, shared: &Shared) {
         let _turn = self.auth.lock().await;
-        self.clear_session();
+        self.clear_session(shared);
     }
 
-    /// Saved Google accounts for the account menu. Display fields only: cookies, delegated ids and
-    /// visitorData never cross the Tauri boundary (context/15).
-    pub fn google_accounts(&self) -> Vec<serde_json::Value> {
-        let active = self.db.get_setting("active_account");
-        self.db
-            .list_accounts()
-            .into_iter()
-            .map(|account| {
-                let info = account
-                    .account_json
-                    .as_deref()
-                    .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
-                    .unwrap_or_else(|| serde_json::json!({}));
-                serde_json::json!({
-                    "id": account.id,
-                    "name": info.get("name").cloned(),
-                    "handle": info.get("handle").cloned(),
-                    "email": info.get("email").cloned(),
-                    "thumbnail": info.get("thumbnail").cloned(),
-                    "active": active.as_deref() == Some(account.id.as_str()),
-                })
-            })
-            .collect()
-    }
-
-    /// Activate a saved Google account without a webview round trip. The stored cookie is
-    /// validated with `account_menu` first: Google rotates its short-lived tokens, and activating
-    /// a dead session would leave the app half-logged-in. On success the transport, the
-    /// projections and the UI all move together; on failure the previous session is left untouched.
-    pub async fn switch_google_account(&self, id: &str) -> Result<serde_json::Value, String> {
-        // The stored cookie being stale is the expected failure here, and the caller rolls back
-        // on it. Waiting on a heal would only delay that by up to `HEAL_TIMEOUT`.
-        innertube::without_healing(self.switch_google_account_inner(id)).await
-    }
-
-    async fn switch_google_account_inner(&self, id: &str) -> Result<serde_json::Value, String> {
-        let _turn = self.auth.lock().await;
-        let account = self.db.get_account(id).ok_or("That account is no longer saved.")?;
-        let previous_cookie = self.it.cookie();
-        let previous_data_sync_id = self.it.data_sync_id();
-        let previous_visitor = self.it.visitor_data();
-
-        self.it.set_cookie(Some(account.session_cookie.clone()));
-        self.it.set_data_sync_id(account.data_sync_id.clone());
-        self.it.set_visitor_data(account.visitor_data.clone());
-
-        // An account saved mid multi-channel sign-in (cookie authenticated, no channel picked
-        // yet) returns to the required picker instead of silently acting as YouTube's default.
-        if account.selected_identity_json.is_none() {
-            // Same rollback as the `account_menu` failure below: the transport already carries the
-            // selected account, so returning without undoing it would leave the app requesting as
-            // one account while the database and the UI still describe the other.
-            if let Err(e) = self.db.set_pending_auth_selection(&account.session_cookie, Some(id)) {
-                self.restore_auth_transport(previous_cookie, previous_data_sync_id);
-                self.it.set_visitor_data(previous_visitor);
-                return Err(format!("Couldn't activate the account: {e}"));
-            }
-            self.persist_visitor_data(account.visitor_data.as_deref());
-            self.forget_playlist_index();
-            let snapshot = self.account_snapshot();
-            let _ = self.events.emit("account-selection-required", ());
-            let _ = self.events.emit("auth-changed", &snapshot);
-            return Ok(snapshot);
-        }
-
-        let client =
-            self.clients.get(innertube::METADATA_CLIENT).ok_or("metadata client missing")?;
-        let outcome = match self.it.account_menu(client).await {
-            Ok(info) if info.name.is_some() => Ok(info.visitor_data),
-            Ok(_) => Err("That account's session has expired. Sign in with it again.".to_owned()),
-            Err(error) => Err(format!("Couldn't switch accounts: {error}")),
-        };
-        let refreshed_visitor = match outcome {
-            Ok(visitor_data) => visitor_data,
-            Err(message) => {
-                self.restore_auth_transport(previous_cookie, previous_data_sync_id);
-                self.it.set_visitor_data(previous_visitor);
-                return Err(message);
-            }
-        };
-
-        self.db.restore_account(&account).map_err(|e| format!("Couldn't switch accounts: {e}"))?;
-        // `account_menu` hands back a login-bound visitorData, and it may already have rotated the
-        // jar out from under the row `restore_account` just wrote back. Re-sync both from what the
-        // transport actually holds now.
-        self.persist_visitor_data(refreshed_visitor.as_deref());
-        self.sync_active_account();
-        self.forget_playlist_index();
-        let snapshot = self.account_snapshot();
-        let _ = self.events.emit("auth-changed", &snapshot);
-        Ok(snapshot)
-    }
-
-    /// Remove a saved Google account from the menu. Removing the active one signs out too.
-    pub async fn remove_google_account(&self, id: &str) {
-        let _turn = self.auth.lock().await;
-        self.forget_account(id);
-    }
-
-    /// Delete a saved row, dropping to guest when it is the one driving requests. Active-ness
-    /// comes from the live session cookie first, with `active_account` as the fallback for an
-    /// already signed-out transport, so removing an account can never leave the transport holding
-    /// its credentials.
-    fn forget_account(&self, id: &str) {
-        let live = self.it.cookie().and_then(|cookie| crate::db::account_key(&cookie));
-        let active = live.as_deref() == Some(id)
-            || self.db.get_setting("active_account").as_deref() == Some(id);
-        self.db.remove_account(id);
-        if active {
-            self.clear_session();
-        }
-    }
-
-    /// Drop the live session back to guest, leaving the saved rows alone.
-    fn clear_session(&self) {
+    fn clear_session(&self, shared: &Shared) {
         self.it.set_cookie(None);
         self.it.set_data_sync_id(None);
-        self.db.delete_setting("session_cookie");
-        self.db.delete_setting("active_account");
-        self.forget_playlist_index();
-        let _ = self.db.clear_auth_identity();
-        let _ = self.events.emit("auth-changed", serde_json::json!({ "signedIn": false }));
+        shared.db.delete_setting(&self.account_key, "session_cookie");
+        self.forget_playlist_index(shared);
+        let _ = shared.db.clear_auth_identity(&self.account_key);
+        let _ = shared.events.emit("auth-changed", serde_json::json!({ "signedIn": false }));
+    }
+
+    /// Saved Google accounts for the account menu — narrowed out of this change (openspec/changes/
+    /// multi-user-isolation design.md's Non-Goals): today's implementation mutates this account's
+    /// live session in place to become a *different* saved account, which isn't safe once another
+    /// session might reference related account state concurrently. Returns a clear error instead
+    /// of silently reproducing that unsafe behavior; a later change does the real redesign
+    /// ("look up or create a different AccountSession, repoint only the calling session at it").
+    pub fn google_accounts(&self) -> Vec<serde_json::Value> {
+        Vec::new()
+    }
+
+    pub async fn switch_google_account(&self, _id: &str) -> Result<serde_json::Value, String> {
+        Err("Switching to a different saved account isn't supported yet on the web build — \
+             sign out and sign back in with that account's cookie instead."
+            .into())
+    }
+
+    pub async fn remove_google_account(&self, _id: &str) {
+        // No-op, matching switch_google_account's narrowing: nothing here can safely mutate a
+        // saved row's relationship to a *live, possibly-shared* AccountSession yet.
     }
 
     /// Mirror the live session + identity projections into the `accounts` table. Called at the end
-    /// of every persist path (single-channel sign-in, channel pick, pending multi-channel sign-in,
-    /// account switch), so the saved row for the active session is always current. Best-effort: a
-    /// failure leaves the projections consistent with the transport and the next persist retries.
-    fn sync_active_account(&self) {
+    /// of every persist path (single-channel sign-in, channel pick, pending multi-channel sign-in),
+    /// so the saved row for this account is always current. Best-effort: a failure leaves the
+    /// projections consistent with the transport and the next persist retries.
+    fn sync_active_account(&self, shared: &Shared) {
         let Some(cookie) = self.it.cookie() else { return };
-        let Some(id) = crate::db::account_key(&cookie) else { return };
         let account = StoredAccount {
-            id,
+            id: self.account_key.clone(),
             session_cookie: cookie.clone(),
-            data_sync_id: self.db.get_setting("data_sync_id").filter(|id| !id.is_empty()),
-            selected_identity_json: self.db.get_setting("selected_identity_json"),
-            account_json: self.db.get_setting("account_json"),
-            visitor_data: self.db.get_setting("visitor_data"),
+            data_sync_id: shared
+                .db
+                .get_setting(&self.account_key, "data_sync_id")
+                .filter(|id| !id.is_empty()),
+            selected_identity_json: shared.db.get_setting(&self.account_key, "selected_identity_json"),
+            account_json: shared.db.get_setting(&self.account_key, "account_json"),
+            visitor_data: shared.db.get_setting(&self.account_key, "visitor_data"),
             added_at: now_secs(),
         };
-        if let Err(error) = self.db.upsert_account(&account) {
+        if let Err(error) = shared.db.upsert_account(&account) {
             tracing::warn!(%error, "could not persist the signed-in account row");
             return;
         }
-        self.db.set_setting("active_account", &account.id);
         // The startup bootstrap reads this projection; keep it in step with the jar.
-        self.db.set_setting("session_cookie", &cookie);
+        shared.db.set_setting(&self.account_key, "session_cookie", &cookie);
     }
 
     /// Write a jar the transport rotated (`cookie_changed`, #165 / KI-2) back where the next
-    /// launch and the next account switch read it: the `session_cookie` projection and the
-    /// account's own row. Keyed on the jar's own SAPISID, so a switch racing this write cannot
-    /// file one account's cookies under another account's row.
-    pub fn persist_rotated_cookie(&self) {
+    /// launch reads it: the `session_cookie` projection and the account's own row.
+    pub fn persist_rotated_cookie(&self, shared: &Shared) {
         let Some(cookie) = self.it.cookie() else { return };
-        let Some(id) = crate::db::account_key(&cookie) else { return };
-        self.db.set_setting("session_cookie", &cookie);
-        self.db.update_account_cookie(&id, &cookie);
+        shared.db.set_setting(&self.account_key, "session_cookie", &cookie);
+        shared.db.update_account_cookie(&self.account_key, &cookie);
     }
 
     /// Keep-alive ping: rolls the session tokens and returns a fresh login-bound visitorData.
     /// The transport's own rotation only fires on requests the app makes, so an idle night leaves
-    /// the jar to go stale, and `refresh_session` can only re-mint whichever account the login
-    /// webview happens to hold. This is what keeps a switched-to account alive.
-    ///
-    /// Gated on the live cookie still being the active account, and re-checked after the await so
-    /// a switch landing mid-request cannot be overwritten.
-    pub async fn keep_session_alive(&self) {
-        let Some(cookie) = self.it.cookie() else { return };
-        let Some(active) = self.db.get_setting("active_account") else { return };
-        if crate::db::account_key(&cookie).as_deref() != Some(active.as_str()) {
+    /// the jar to go stale.
+    pub async fn keep_session_alive(&self, shared: &Shared) {
+        if self.it.cookie().is_none() {
             return;
         }
-        let Some(client) = self.clients.get(innertube::METADATA_CLIENT) else { return };
+        let Some(client) = shared.clients.get(innertube::METADATA_CLIENT) else { return };
         match self.it.account_menu(client).await {
             Ok(info) if info.name.is_some() => {
-                let live = self.it.cookie().and_then(|c| crate::db::account_key(&c));
-                if live.as_deref() != Some(active.as_str())
-                    || self.db.get_setting("active_account").as_deref() != Some(active.as_str())
-                {
-                    return;
-                }
-                self.persist_visitor_data(info.visitor_data.as_deref());
-                self.sync_active_account();
-                tracing::debug!("session keep-alive successful");
+                self.persist_visitor_data(shared, info.visitor_data.as_deref());
+                self.sync_active_account(shared);
+                tracing::debug!(account = %self.account_key, "session keep-alive successful");
             }
             Ok(_) => tracing::warn!("session keep-alive: the session did not authenticate"),
             Err(error) => tracing::warn!(%error, "session keep-alive failed"),
@@ -789,20 +635,20 @@ impl AppState {
 
     /// Current account for the UI. New installs derive it from the canonical selected identity;
     /// legacy `account_json` remains a read fallback so existing databases migrate without a wipe.
-    pub fn account_snapshot(&self) -> serde_json::Value {
-        if auth_selection_pending(&self.db) && self.it.is_logged_in() {
+    pub fn account_snapshot(&self, shared: &Shared) -> serde_json::Value {
+        if auth_selection_pending(&shared.db, &self.account_key) && self.it.is_logged_in() {
             return serde_json::json!({
                 "signedIn": true,
                 "selectionRequired": true,
                 "canSwitch": true,
             });
         }
-        if let Some(selected) = selected_identity_from_db(&self.db) {
+        if let Some(selected) = selected_identity_from_db(&shared.db, &self.account_key) {
             return selected.account_json(self.it.is_logged_in());
         }
-        let mut v = self
+        let mut v = shared
             .db
-            .get_setting("account_json")
+            .get_setting(&self.account_key, "account_json")
             .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
             .filter(serde_json::Value::is_object)
             .unwrap_or_else(|| serde_json::json!({}));
@@ -811,3 +657,48 @@ impl AppState {
     }
 }
 
+/// An anonymous caller's settings scope — never a real `account_key`, so it never collides with
+/// one (every real one is the `ga-<md5>` shape `account_key()` produces).
+pub const ANONYMOUS: &str = GLOBAL_ACCOUNT;
+
+/// A signed-in request's view of both halves of the split (openspec/changes/multi-user-isolation):
+/// the process-wide `Shared` plus this one request's own `AccountSession`. Replaces `&AppState` in
+/// every `commands/*.rs` signature — the field-access paths below (`.db()`, `.it()`,
+/// `.account_key()`) keep those call sites close to their pre-split shape instead of threading two
+/// separate parameters through every command function.
+pub struct Scoped<'a> {
+    pub shared: &'a Shared,
+    pub account: &'a AccountSession,
+}
+
+impl<'a> Scoped<'a> {
+    pub fn db(&self) -> &Db {
+        &self.shared.db
+    }
+    pub fn it(&self) -> &InnerTube {
+        &self.account.it
+    }
+    pub fn account_key(&self) -> &str {
+        &self.account.account_key
+    }
+    pub fn clients(&self) -> &Clients {
+        &self.shared.clients
+    }
+}
+
+/// `Scoped`'s owned, `Clone`able counterpart, for the one caller (`lastfm::connect`) that spawns a
+/// background task outliving the request and needs to move its scope into it rather than borrow.
+#[derive(Clone)]
+pub struct ScopedOwned {
+    pub shared: Arc<Shared>,
+    pub account: Arc<AccountSession>,
+}
+
+impl ScopedOwned {
+    pub fn db(&self) -> &Db {
+        &self.shared.db
+    }
+    pub fn account_key(&self) -> &str {
+        &self.account.account_key
+    }
+}

@@ -18,14 +18,13 @@
 //! ponytail: position-based threshold; track real played-time if cheating ever matters.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use innertube::SongItem;
 use md5::{Digest, Md5};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
-use crate::state::AppState;
+use crate::state::{Scoped, ScopedOwned};
 
 /// Last.fm API credentials. Baked in at compile time from the gitignored `src-tauri/lastfm.keys`
 /// (via build.rs) — never from source, the repo is public. Registered at
@@ -328,8 +327,8 @@ fn sign(params: &[(String, String)]) -> String {
 
 // --- auth flow (connect / disconnect / status) ----------------------------------------------
 
-fn emit_state(state: &AppState, connected: bool, username: Option<&str>, error: Option<&str>) {
-    state.events.emit(
+fn emit_state_owned(state: &ScopedOwned, connected: bool, username: Option<&str>, error: Option<&str>) {
+    state.shared.events.emit(
         "lastfm-state",
         serde_json::json!({ "connected": connected, "username": username, "error": error }),
     );
@@ -340,13 +339,13 @@ fn emit_state(state: &AppState, connected: bool, username: Option<&str>, error: 
 /// navigate there; see design.md's note that this file is adapted, not a verbatim fork), then
 /// poll `auth.getSession` in the background until they approve (or the poll times out /
 /// is superseded). Resolution arrives via the `lastfm-state` event, not this call's return value.
-pub async fn connect(state: Arc<AppState>) -> Result<String, String> {
+pub async fn connect(state: ScopedOwned) -> Result<String, String> {
     if API_KEY.is_empty() || API_SECRET.is_empty() {
         return Err("Last.fm isn't configured on this server — set LIMUSIC_LASTFM_API_KEY/\
                     LIMUSIC_LASTFM_API_SECRET (see https://www.last.fm/api/account/create)."
             .into());
     }
-    let gen = state.lastfm.bump_gen();
+    let gen = state.shared.lastfm.bump_gen();
     let token = call("auth.getToken", vec![], false)
         .await
         .map_err(|e| format!("Last.fm: {}", e.message))?
@@ -360,7 +359,7 @@ pub async fn connect(state: Arc<AppState>) -> Result<String, String> {
     tokio::spawn(async move {
         for _ in 0..AUTH_POLL_TRIES {
             tokio::time::sleep(AUTH_POLL_EVERY).await;
-            if state.lastfm.gen() != gen {
+            if state.shared.lastfm.gen() != gen {
                 return; // superseded by a newer connect, or a disconnect
             }
             let params = vec![("token".to_string(), token.clone())];
@@ -369,39 +368,42 @@ pub async fn connect(state: Arc<AppState>) -> Result<String, String> {
                     let name = body.pointer("/session/name").and_then(|v| v.as_str());
                     let key = body.pointer("/session/key").and_then(|v| v.as_str());
                     let (Some(name), Some(key)) = (name, key) else {
-                        emit_state(&state, false, None, Some("Last.fm sent a malformed session"));
+                        emit_state_owned(&state, false, None, Some("Last.fm sent a malformed session"));
                         return;
                     };
-                    state.db.set_setting("lastfm_session_key", key);
-                    state.db.set_setting("lastfm_username", name);
-                    state.lastfm.set_session(Some(key.to_string()));
+                    state.db().set_setting(state.account_key(), "lastfm_session_key", key);
+                    state.db().set_setting(state.account_key(), "lastfm_username", name);
+                    state.shared.lastfm.set_session(Some(key.to_string()));
                     tracing::info!(user = name, "last.fm connected");
-                    emit_state(&state, true, Some(name), None);
+                    emit_state_owned(&state, true, Some(name), None);
                     return;
                 }
                 Err(e) if e.retryable() => continue, // not approved yet (or transient) — keep polling
                 Err(e) => {
-                    emit_state(&state, false, None, Some(&format!("Last.fm: {}", e.message)));
+                    emit_state_owned(&state, false, None, Some(&format!("Last.fm: {}", e.message)));
                     return;
                 }
             }
         }
-        emit_state(&state, false, None, Some("Last.fm authorization timed out — try again"));
+        emit_state_owned(&state, false, None, Some("Last.fm authorization timed out — try again"));
     });
     Ok(authorize_url)
 }
 
-pub fn disconnect(state: &AppState) {
-    state.lastfm.bump_gen(); // cancels any in-flight auth poll
-    state.db.set_setting("lastfm_session_key", "");
-    state.db.set_setting("lastfm_username", "");
-    state.lastfm.set_session(None);
-    emit_state(state, false, None, None);
+pub fn disconnect(state: &Scoped<'_>) {
+    state.shared.lastfm.bump_gen(); // cancels any in-flight auth poll
+    state.db().set_setting(state.account_key(), "lastfm_session_key", "");
+    state.db().set_setting(state.account_key(), "lastfm_username", "");
+    state.shared.lastfm.set_session(None);
+    state.shared.events.emit(
+        "lastfm-state",
+        serde_json::json!({ "connected": false, "username": None::<String>, "error": None::<String> }),
+    );
 }
 
-pub fn status(state: &AppState) -> serde_json::Value {
-    let key = state.db.get_setting("lastfm_session_key").filter(|s| !s.is_empty());
-    let username = state.db.get_setting("lastfm_username").filter(|s| !s.is_empty());
+pub fn status(state: &Scoped<'_>) -> serde_json::Value {
+    let key = state.db().get_setting(state.account_key(), "lastfm_session_key").filter(|s| !s.is_empty());
+    let username = state.db().get_setting(state.account_key(), "lastfm_username").filter(|s| !s.is_empty());
     serde_json::json!({ "connected": key.is_some(), "username": username })
 }
 

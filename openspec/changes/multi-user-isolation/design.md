@@ -46,6 +46,13 @@ needs to change as part of this work (see Decisions).
 - Multiple *simultaneous* identities for the *same* physical user acting at once — that's the
   existing "saved accounts, switch between them" feature (`get_google_accounts`/`switch_account`),
   unchanged. This change is about different people, not one person's several logins.
+- **Narrowed during implementation**: `switch_google_account` (switching to a *different saved
+  account entirely*, as opposed to `switch_account`'s within-one-account channel switching) mutates
+  its live session's cookie jar in place today — safe with one account per process, not safe once
+  a different session might reference the same account's state concurrently. Making it safe means
+  "look up or create a different `AccountSession`, then repoint only the calling session at it," a
+  real redesign, not a scoping change. Out of this change's scope: it returns a clear
+  not-yet-supported error instead, tracked as explicit follow-up work.
 - Scoping `local_tracks`/`local_playlists`/`local_playlist_tracks` per account — see Context;
   staying shared is the deliberate choice, not a gap.
 - A hard, enforced admission limit that rejects the Nth concurrent sign-in. The capacity target
@@ -123,11 +130,14 @@ settling the ambiguity design-time rather than leaving it to be guessed mid-impl
   per account now), `quality`, `disabled_stream_clients`, `lastfm_session_key`, `lastfm_username`,
   `locale`, `hide_videos` (these last two are structurally forced per-account regardless: both also
   call `self.it.set_locale(...)`/`set_hide_videos(...)` directly, and `it` is becoming per-account),
-  `playlist_index_synced_at`, `account_selection_pending`, `lyrics_providers` (a personal taste
-  preference, same category as `quality`).
+  `playlist_index_synced_at`, `account_selection_pending`.
 - **Stays global** (no account scoping, same single row for the whole process): `potoken_session`
   (BotGuard session-token persistence — infrastructure state, the same category as `cipher`/
-  `potoken` themselves, not account data) and `blocked_artists` (see Decision 5).
+  `potoken` themselves, not account data), `blocked_artists` (see Decision 5), and **corrected
+  during implementation** `lyrics_providers` — not just a personal preference as first classified:
+  `GET /api/lyrics` reads it directly and is itself an anonymous, ungated route (fetching lyrics
+  never required sign-in), so like `blocked_artists` there's no session to scope it by. Its other
+  reader, the signed-in `/api/settings` allowlist, reads the same global row either way.
 - **Removed, not migrated**: `active_account`. Under one account per process this setting named
   which `StoredAccount` row was "the" live one; under concurrent accounts there's no single active
   one to name — a session's `account_key` (from `SessionStore`) already identifies which account a
@@ -213,6 +223,18 @@ place. The route handler's `register_playback` call uses that specific account's
 3. Rollback: the quarantine mechanism this file already uses for a corrupt DB (`open_or_quarantine`)
    covers a failed migration the same way — the previous binary + the pre-migration file (kept as
    a `.bak` by the migration step before it touches anything) is the rollback path.
+
+### 5. Account-switching keeps its behavior; "active" moves from a global setting to the session
+
+**Found during implementation**: the existing "switch between several of your own saved Google
+logins" feature (`restore_account`, `switch_account_inner`, `switch_google_account_inner`) is built
+on the global `active_account` setting Decision 2 removes — not a coincidental user of it. Its
+Non-Goal status (unchanged for one user acting alone) doesn't mean untouched code; it means the
+same observable behavior. Resolution: `SessionStore`'s session → `account_key` mapping already *is*
+"which account is active," just per-session instead of global. These methods' "make this the
+active account" side effect becomes "update the calling session's own entry in `SessionStore`"
+instead of a global settings write — which means they need the calling session's id threaded in
+as a parameter, not just account state.
 
 ## Open Questions
 

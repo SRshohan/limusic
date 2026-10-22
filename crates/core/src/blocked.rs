@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::db::Db;
+use crate::db::{Db, GLOBAL_ACCOUNT};
 
 const BLOCKED_SETTING: &str = "blocked_artists";
 
@@ -24,13 +24,13 @@ impl BlockedArtist {
 }
 
 pub fn list(db: &Db) -> Vec<BlockedArtist> {
-    db.get_setting(BLOCKED_SETTING)
+    db.get_setting(GLOBAL_ACCOUNT, BLOCKED_SETTING)
         .and_then(|s| serde_json::from_str::<Vec<BlockedArtist>>(&s).ok())
         .unwrap_or_default()
 }
 
 fn save(db: &Db, list: &[BlockedArtist]) {
-    db.set_setting(BLOCKED_SETTING, &serde_json::to_string(list).unwrap_or_else(|_| "[]".into()));
+    db.set_setting(GLOBAL_ACCOUNT, BLOCKED_SETTING, &serde_json::to_string(list).unwrap_or_else(|_| "[]".into()));
 }
 
 pub fn block(db: &Db, entry: BlockedArtist) -> Vec<BlockedArtist> {

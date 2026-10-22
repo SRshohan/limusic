@@ -29,7 +29,7 @@ use std::time::Duration;
 use innertube::NextResult;
 use serde::{Deserialize, Serialize};
 
-use crate::state::AppState;
+use crate::state::{Shared, ANONYMOUS};
 
 /// How long a cached "no lyrics found" verdict suppresses refetching.
 const MISS_TTL_SECS: i64 = 24 * 3600;
@@ -85,8 +85,8 @@ pub struct ProviderInfo {
 }
 
 /// The provider list for Settings and the source picker, in the user's order.
-pub fn providers(state: &AppState) -> Vec<ProviderInfo> {
-    provider_order(state.db.get_setting("lyrics_providers").as_deref())
+pub fn providers(state: &Shared) -> Vec<ProviderInfo> {
+    provider_order(state.db.get_setting(ANONYMOUS, "lyrics_providers").as_deref())
         .into_iter()
         .map(|(id, on)| ProviderInfo { id, name: provider_name(id), on })
         .collect()
@@ -159,7 +159,7 @@ pub struct LyricsRequest {
 /// or down the provider list). `Some(id)` asks that one provider alone and caches nothing: the
 /// source picker's preview, which also works for a provider switched off in Settings.
 pub async fn get_lyrics(
-    state: &AppState,
+    state: &Shared,
     req: LyricsRequest,
     source: Option<String>,
 ) -> Result<Option<Lyrics>, String> {
@@ -176,7 +176,7 @@ pub async fn get_lyrics(
 /// The source picker's choice for one song. `Some(id)`: that provider's lyrics, kept for the song
 /// (a miss leaves what was there). `None`: forget the choice and let the list decide again.
 pub async fn choose_source(
-    state: &AppState,
+    state: &Shared,
     req: LyricsRequest,
     source: Option<String>,
 ) -> Option<Lyrics> {
@@ -201,7 +201,7 @@ pub async fn choose_source(
 
 /// Nudge a song's timing. Pins what it applies to, so the nudge isn't lost to a reorder that would
 /// fetch lyrics timed differently. Only a cached song can keep one; the view still applies it.
-pub fn set_offset(state: &AppState, video_id: &str, offset_ms: i64) {
+pub fn set_offset(state: &Shared, video_id: &str, offset_ms: i64) {
     let Some(Some(json)) = state.db.get_lyrics(video_id, now_secs(), MISS_TTL_SECS) else {
         return;
     };
@@ -213,7 +213,7 @@ pub fn set_offset(state: &AppState, video_id: &str, offset_ms: i64) {
     }
 }
 
-async fn cached_or_fetched(state: &AppState, req: LyricsRequest) -> Option<Lyrics> {
+async fn cached_or_fetched(state: &Shared, req: LyricsRequest) -> Option<Lyrics> {
     let now = now_secs();
     let video_id = req.video_id.clone();
     if let Some(cached) = state.db.get_lyrics(&video_id, now, MISS_TTL_SECS) {
@@ -230,7 +230,7 @@ async fn cached_or_fetched(state: &AppState, req: LyricsRequest) -> Option<Lyric
 /// One provider on its own, uncached. `next()` only when that provider needs it (YouTube's browseId)
 /// or the length is unknown: the picker previews every provider at once, and they'd all ask.
 async fn preview(
-    state: &AppState,
+    state: &Shared,
     mut req: LyricsRequest,
     id: &str,
 ) -> Result<Option<Lyrics>, String> {
@@ -251,9 +251,9 @@ async fn preview(
 ///
 /// `Ok(None)` for a local file: its duration came off the file itself, and YouTube has nothing for
 /// it. `Err` when `next()` failed, which is not the same as YouTube having no lyrics.
-async fn resolve(state: &AppState, req: &mut LyricsRequest) -> Result<Option<NextResult>, String> {
+async fn resolve(state: &Shared, req: &mut LyricsRequest) -> Result<Option<NextResult>, String> {
     let client = state.clients.get(innertube::METADATA_CLIENT).ok_or("no metadata client")?;
-    let next = state.it.next(client, Some(&req.video_id), None).await.map_err(|e| e.to_string())?;
+    let next = state.anonymous_it.next(client, Some(&req.video_id), None).await.map_err(|e| e.to_string())?;
     let seed = next.items.iter().find(|i| i.video_id == req.video_id);
     if req.duration.is_none() {
         req.duration = seed.and_then(|i| duration_str_secs(i.duration.as_deref()?));
@@ -268,7 +268,7 @@ async fn resolve(state: &AppState, req: &mut LyricsRequest) -> Result<Option<Nex
 /// answer we couldn't read), never "no lyrics", so it can't cache a miss.
 async fn ask(
     id: &str,
-    state: &AppState,
+    state: &Shared,
     req: &LyricsRequest,
     next: &Result<Option<NextResult>, String>,
 ) -> Result<Option<Lyrics>, String> {
@@ -291,7 +291,7 @@ async fn ask(
 /// known (the fuzzy providers land on wrong *cuts* without it, lyrics seconds off the audio) or the
 /// provider matched the video itself; a miss only when some provider answered rather than merely
 /// erroring (offline must not poison the cache with a 24h "no lyrics").
-async fn fetch(state: &AppState, mut req: LyricsRequest) -> (Option<Lyrics>, bool) {
+async fn fetch(state: &Shared, mut req: LyricsRequest) -> (Option<Lyrics>, bool) {
     let next = resolve(state, &mut req).await;
     if let Err(e) = &next {
         tracing::debug!(error = %e, "lyrics: next() failed");
@@ -301,7 +301,7 @@ async fn fetch(state: &AppState, mut req: LyricsRequest) -> (Option<Lyrics>, boo
 
     let mut definitive = false;
     let mut plain: Option<Lyrics> = None;
-    for (id, on) in provider_order(state.db.get_setting("lyrics_providers").as_deref()) {
+    for (id, on) in provider_order(state.db.get_setting(ANONYMOUS, "lyrics_providers").as_deref()) {
         if !on {
             continue;
         }
@@ -326,7 +326,7 @@ async fn fetch(state: &AppState, mut req: LyricsRequest) -> (Option<Lyrics>, boo
 /// YouTube Music's own lyrics: the timed ones its mobile app shows, else the plain text under
 /// YouTube's attribution ("Source: Musixmatch"). Region-licensed, so often absent.
 async fn youtube_get(
-    state: &AppState,
+    state: &Shared,
     next: &Result<Option<NextResult>, String>,
 ) -> Result<Option<Lyrics>, String> {
     // A next() answer with no lyrics tab IS "YouTube has no lyrics".
@@ -336,7 +336,7 @@ async fn youtube_get(
     };
     let Some(bid) = bid else { return Ok(None) };
     if let Some(client) = state.clients.get(innertube::LYRICS_TIMED_CLIENT) {
-        match state.it.lyrics_timed(client, &bid).await {
+        match state.anonymous_it.lyrics_timed(client, &bid).await {
             Ok(lines) if !lines.is_empty() => {
                 return Ok(Some(Lyrics {
                     source: "YouTube Music".into(),
@@ -353,7 +353,7 @@ async fn youtube_get(
         }
     }
     let client = state.clients.get(innertube::METADATA_CLIENT).ok_or("no metadata client")?;
-    let plain = state.it.lyrics_plain(client, &bid).await.map_err(|e| e.to_string())?;
+    let plain = state.anonymous_it.lyrics_plain(client, &bid).await.map_err(|e| e.to_string())?;
     Ok(plain.and_then(|p| {
         let source = p.footer.unwrap_or_else(|| "YouTube Music".into());
         plain_from_text(Some(&p.text), &source)

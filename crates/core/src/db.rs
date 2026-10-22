@@ -12,6 +12,12 @@ use rusqlite::Connection;
 const CLEAR_LYRICS: &str =
     "DELETE FROM lyrics_cache WHERE lyrics IS NULL OR json_extract(lyrics, '$.pinned') IS NOT 1";
 
+/// The `settings`/`plays` account_id for the handful of keys that are deliberately process-wide,
+/// not per-account (openspec/changes/multi-user-isolation design.md Decision 2):
+/// `potoken_session` and `blocked_artists` today. Never a real `account_key` — every real one is
+/// the `ga-<md5>` shape `account_key()` produces, which can't collide with the empty string.
+pub const GLOBAL_ACCOUNT: &str = "";
+
 pub struct Db(Mutex<Connection>);
 
 /// The stored-account key (multi-account support): a stable per-Google-account identifier derived
@@ -151,9 +157,18 @@ impl Db {
         let _ = conn.pragma_update(None, "synchronous", "NORMAL");
         conn.execute_batch(
             r#"
+            -- account_id scopes a row to one signed-in account (openspec/changes/
+            -- multi-user-isolation): '' is the reserved key for the handful of settings that are
+            -- deliberately process-wide, not per-account (see GLOBAL_ACCOUNT below) — never a real
+            -- account_key, since every real one is the `ga-<md5>` shape `account_key()` produces.
+            -- A pre-existing single-account DB's flat `(key)`-keyed table is rebuilt into this
+            -- shape by the `user_version < 3` migration below; `IF NOT EXISTS` only takes this
+            -- branch on a database that never had the old table at all.
             CREATE TABLE IF NOT EXISTS settings (
-                key   TEXT PRIMARY KEY,
-                value TEXT NOT NULL
+                account_id TEXT NOT NULL,
+                key        TEXT NOT NULL,
+                value      TEXT NOT NULL,
+                PRIMARY KEY (account_id, key)
             );
             CREATE TABLE IF NOT EXISTS stream_url_cache (
                 video_id    TEXT PRIMARY KEY,
@@ -171,10 +186,11 @@ impl Db {
                 fetched_at INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS plays (
-                id        INTEGER PRIMARY KEY,
-                video_id  TEXT NOT NULL,
-                played_at INTEGER NOT NULL,
-                song_json TEXT NOT NULL
+                id         INTEGER PRIMARY KEY,
+                account_id TEXT NOT NULL DEFAULT '',
+                video_id   TEXT NOT NULL,
+                played_at  INTEGER NOT NULL,
+                song_json  TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS plays_played_at ON plays(played_at);
             CREATE TABLE IF NOT EXISTS local_tracks (
@@ -282,6 +298,14 @@ impl Db {
         // providers joined the head of it. Boidu turned off carries over as `-boidu`. Cached hits
         // never expire, so without a purge no song already played would ever reach the new ones.
         if version < 2 {
+            // Runs before the `version < 3` rebuild further down, so a genuinely old file (which
+            // predates the `account_id` column) is still 2-column `settings` at this point — this
+            // stays 2-column SQL to match. `lyrics_providers`/`lyrics_boidu` end up global
+            // (`GLOBAL_ACCOUNT`, `''`) once `version < 3` rebuilds this row along with every other
+            // pre-existing one, backfilling it under whichever account was `active_account` at
+            // migration time — a harmless, one-time mis-scoping for this one global key specifically,
+            // self-correcting the first time it's written again post-migration (`commands/settings.rs`
+            // always targets `GLOBAL_ACCOUNT` for it going forward).
             let _ = conn.execute(
                 "INSERT OR IGNORE INTO settings(key, value) SELECT 'lyrics_providers', '-boidu'
                     FROM settings WHERE key = 'lyrics_boidu' AND value = 'false'",
@@ -322,11 +346,9 @@ impl Db {
                         now_secs()
                     ],
                 );
-                let _ = conn.execute(
-                    "INSERT INTO settings(key, value) VALUES('active_account', ?1) \
-                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                    [id],
-                );
+                // No `active_account` write (openspec/changes/multi-user-isolation Decision 2/5):
+                // nothing reads that key any more — the `accounts` row this just created is
+                // already enough for the account_id backfill further down this function to find.
             }
         }
         // An account's id is derived from its own cookie, so any change to `account_key` (the
@@ -351,12 +373,10 @@ impl Db {
             if new_id == old_id {
                 continue;
             }
-            // The row's new key and the `active_account` pointer at it have to land together: a
-            // crash between them leaves the pointer at an id nothing computes any more, and the
-            // next launch sees the ids already agreeing and re-scans nothing.
-            // Every statement goes through `tx`, and the commit only happens if all of them
-            // succeeded: dropping the transaction rolls the row back, which beats committing a
-            // pointer to an id whose row never moved.
+            // Every statement goes through `tx`, and the commit only happens if it succeeded:
+            // dropping the transaction rolls the row back rather than leaving a half-moved account.
+            // No `active_account` pointer to move alongside it any more (openspec/changes/
+            // multi-user-isolation Decision 2/5) — nothing reads that key.
             let Ok(tx) = conn.unchecked_transaction() else { continue };
             let taken: i64 = tx
                 .query_row("SELECT COUNT(*) FROM accounts WHERE id = ?1", [&new_id], |r| r.get(0))
@@ -374,45 +394,110 @@ impl Db {
                 .is_ok()
                     && tx.execute("DELETE FROM accounts WHERE id = ?1", [&old_id]).is_ok()
             };
-            let pointed = tx
-                .execute(
-                    "UPDATE settings SET value = ?1 WHERE key = 'active_account' AND value = ?2",
-                    [&new_id, &old_id],
-                )
-                .is_ok();
-            if moved && pointed {
+            if moved {
                 let _ = tx.commit();
             }
+        }
+        // openspec/changes/multi-user-isolation: `settings` moves from a flat `(key)`-keyed table
+        // to `(account_id, key)`, and `plays` gains an `account_id` column — both so two different
+        // signed-in accounts' rows coexist instead of overwriting each other. SQLite can't alter a
+        // PRIMARY KEY in place, so `settings` is rebuilt wholesale; `plays` only needs ADD COLUMN.
+        // Gated on `user_version` (not "does the column exist") because a column check would also
+        // match a database this same block already upgraded, and the rebuild below is correct to
+        // run only the first time.
+        if version < 3 {
+            let has_account_id = conn
+                .prepare("SELECT 1 FROM pragma_table_info('settings') WHERE name = 'account_id'")
+                .and_then(|mut s| s.exists([]))
+                .unwrap_or(true); // if the check itself fails, assume already-migrated: don't rebuild
+            if !has_account_id {
+                // Every pre-existing deployment has at most one signed-in account (today's
+                // single-account design) — whichever `accounts` row is oldest is unambiguously it.
+                // A truly fresh DB has none yet; its global-prefs-only settings rows (set while
+                // signed out) have no account to belong to and fall back to the reserved global key.
+                let legacy_account: Option<String> = conn
+                    .query_row("SELECT id FROM accounts ORDER BY added_at ASC LIMIT 1", [], |r| {
+                        r.get(0)
+                    })
+                    .ok();
+                let backfill = legacy_account.as_deref().unwrap_or(GLOBAL_ACCOUNT);
+                let _ = conn.execute_batch(
+                    "CREATE TABLE settings_new (
+                        account_id TEXT NOT NULL,
+                        key        TEXT NOT NULL,
+                        value      TEXT NOT NULL,
+                        PRIMARY KEY (account_id, key)
+                    );",
+                );
+                let _ = conn.execute(
+                    "INSERT INTO settings_new(account_id, key, value)
+                        SELECT ?1, key, value FROM settings WHERE key != 'active_account'",
+                    [backfill],
+                );
+                let _ = conn.execute_batch(
+                    "DROP TABLE settings;
+                    ALTER TABLE settings_new RENAME TO settings;",
+                );
+            }
+            let _ = conn.execute("ALTER TABLE plays ADD COLUMN account_id TEXT NOT NULL DEFAULT ''", []);
+            // After the column exists either way (just added above, or already there on a fresh
+            // DB's CREATE TABLE) — doing this here rather than in the main batch is what lets a
+            // pre-existing DB's ADD COLUMN run before anything indexes a column that isn't there yet.
+            let _ = conn.execute(
+                "CREATE INDEX IF NOT EXISTS plays_account_played_at ON plays(account_id, played_at)",
+                [],
+            );
+            if let Ok(legacy_account) = conn.query_row(
+                "SELECT id FROM accounts ORDER BY added_at ASC LIMIT 1",
+                [],
+                |r| r.get::<_, String>(0),
+            ) {
+                let _ = conn.execute(
+                    "UPDATE plays SET account_id = ?1 WHERE account_id = ''",
+                    [legacy_account],
+                );
+            }
+            let _ = conn.execute_batch("PRAGMA user_version = 3");
         }
         Ok(Db(Mutex::new(conn)))
     }
 
     // --- settings ---------------------------------------------------------------------------
 
-    pub fn get_setting(&self, key: &str) -> Option<String> {
+    /// `account_id`: a real `account_key()` for a per-account setting, or `GLOBAL_ACCOUNT` for one
+    /// of the handful that are deliberately process-wide (openspec/changes/multi-user-isolation).
+    pub fn get_setting(&self, account_id: &str, key: &str) -> Option<String> {
         let conn = self.0.lock().unwrap();
-        conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0)).ok()
+        conn.query_row(
+            "SELECT value FROM settings WHERE account_id = ?1 AND key = ?2",
+            [account_id, key],
+            |r| r.get(0),
+        )
+        .ok()
     }
 
-    pub fn set_setting(&self, key: &str, value: &str) {
+    pub fn set_setting(&self, account_id: &str, key: &str, value: &str) {
         let conn = self.0.lock().unwrap();
         let _ = conn.execute(
-            "INSERT INTO settings(key, value) VALUES(?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            [key, value],
+            "INSERT INTO settings(account_id, key, value) VALUES(?1, ?2, ?3)
+             ON CONFLICT(account_id, key) DO UPDATE SET value = excluded.value",
+            [account_id, key, value],
         );
     }
 
-    pub fn delete_setting(&self, key: &str) {
+    pub fn delete_setting(&self, account_id: &str, key: &str) {
         let conn = self.0.lock().unwrap();
-        let _ = conn.execute("DELETE FROM settings WHERE key = ?1", [key]);
+        let _ = conn
+            .execute("DELETE FROM settings WHERE account_id = ?1 AND key = ?2", [account_id, key]);
     }
 
     /// Persist the canonical selected identity and its two legacy projections atomically. Older
     /// releases still read `data_sync_id` / `account_json`; keeping all three in one transaction
     /// prevents a restart from pairing one channel's request delegation with another's display.
+    /// `scope`: the signing-in account's `account_key` (openspec/changes/multi-user-isolation).
     pub fn set_auth_identity(
         &self,
+        scope: &str,
         session_cookie: &str,
         selected_json: &str,
         data_sync_id: Option<&str>,
@@ -421,73 +506,75 @@ impl Db {
         let mut conn = self.0.lock().unwrap();
         let tx = conn.transaction()?;
         tx.execute(
-            "INSERT INTO settings(key, value) VALUES('session_cookie', ?1)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            [session_cookie],
+            "INSERT INTO settings(account_id, key, value) VALUES(?1, 'session_cookie', ?2)
+             ON CONFLICT(account_id, key) DO UPDATE SET value = excluded.value",
+            [scope, session_cookie],
         )?;
         tx.execute(
-            "INSERT INTO settings(key, value) VALUES('selected_identity_json', ?1)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            [selected_json],
+            "INSERT INTO settings(account_id, key, value) VALUES(?1, 'selected_identity_json', ?2)
+             ON CONFLICT(account_id, key) DO UPDATE SET value = excluded.value",
+            [scope, selected_json],
         )?;
         if let Some(id) = data_sync_id {
             tx.execute(
-                "INSERT INTO settings(key, value) VALUES('data_sync_id', ?1)
-                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                [id],
+                "INSERT INTO settings(account_id, key, value) VALUES(?1, 'data_sync_id', ?2)
+                 ON CONFLICT(account_id, key) DO UPDATE SET value = excluded.value",
+                [scope, id],
             )?;
         } else {
-            tx.execute("DELETE FROM settings WHERE key = 'data_sync_id'", [])?;
+            tx.execute(
+                "DELETE FROM settings WHERE account_id = ?1 AND key = 'data_sync_id'",
+                [scope],
+            )?;
         }
         tx.execute(
-            "INSERT INTO settings(key, value) VALUES('account_json', ?1)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            [account_json],
+            "INSERT INTO settings(account_id, key, value) VALUES(?1, 'account_json', ?2)
+             ON CONFLICT(account_id, key) DO UPDATE SET value = excluded.value",
+            [scope, account_json],
         )?;
-        tx.execute("DELETE FROM settings WHERE key = 'account_selection_pending'", [])?;
+        tx.execute(
+            "DELETE FROM settings WHERE account_id = ?1 AND key = 'account_selection_pending'",
+            [scope],
+        )?;
         tx.commit()
     }
 
     /// Persist an authenticated cookie while deliberately leaving the account unfinished. Keeping
     /// the marker and removal of stale identity projections in the same transaction means a crash
     /// during the required picker cannot restart into YouTube's default channel silently.
+    /// `scope`: the signing-in account's `account_key`. The `active_account` pointer this used to
+    /// also write is gone (openspec/changes/multi-user-isolation Decision 2/5) — which account a
+    /// request is for is the session's own concern now, not a settings row.
     pub fn set_pending_auth_selection(
         &self,
+        scope: &str,
         session_cookie: &str,
-        account_id: Option<&str>,
     ) -> rusqlite::Result<()> {
         let mut conn = self.0.lock().unwrap();
         let tx = conn.transaction()?;
         tx.execute(
-            "INSERT INTO settings(key, value) VALUES('session_cookie', ?1)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            [session_cookie],
+            "INSERT INTO settings(account_id, key, value) VALUES(?1, 'session_cookie', ?2)
+             ON CONFLICT(account_id, key) DO UPDATE SET value = excluded.value",
+            [scope, session_cookie],
         )?;
         for key in ["selected_identity_json", "data_sync_id", "account_json"] {
-            tx.execute("DELETE FROM settings WHERE key = ?1", [key])?;
+            tx.execute("DELETE FROM settings WHERE account_id = ?1 AND key = ?2", [scope, key])?;
         }
         tx.execute(
-            "INSERT INTO settings(key, value) VALUES('account_selection_pending', 'true')
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            [],
+            "INSERT INTO settings(account_id, key, value) VALUES(?1, 'account_selection_pending', 'true')
+             ON CONFLICT(account_id, key) DO UPDATE SET value = excluded.value",
+            [scope],
         )?;
-        if let Some(id) = account_id {
-            tx.execute(
-                "INSERT INTO settings(key, value) VALUES('active_account', ?1)
-                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                [id],
-            )?;
-        }
         tx.commit()
     }
 
-    pub fn clear_auth_identity(&self) -> rusqlite::Result<()> {
+    pub fn clear_auth_identity(&self, scope: &str) -> rusqlite::Result<()> {
         let mut conn = self.0.lock().unwrap();
         let tx = conn.transaction()?;
         for key in
             ["selected_identity_json", "data_sync_id", "account_json", "account_selection_pending"]
         {
-            tx.execute("DELETE FROM settings WHERE key = ?1", [key])?;
+            tx.execute("DELETE FROM settings WHERE account_id = ?1 AND key = ?2", [scope, key])?;
         }
         tx.commit()
     }
@@ -585,17 +672,20 @@ impl Db {
         let _ = conn.execute("DELETE FROM accounts WHERE id = ?1", [id]);
     }
 
-    /// Write a saved account's fields into the active-account `settings` projections and flip the
-    /// `active_account` pointer, atomically (used when switching to a saved account), so a crash
-    /// mid-switch can't restart into projections for one account and a pointer for another.
-    /// Clears `account_selection_pending`: a completed account needs no channel pick.
+    /// Write a saved account's fields into its own `settings` projections, atomically (used when
+    /// switching to a saved account), so a crash mid-switch can't leave half the projections
+    /// written. Clears `account_selection_pending`: a completed account needs no channel pick.
+    /// Scoped by `account.id` itself — this account's projections are its own row set, not a
+    /// global "active" one (openspec/changes/multi-user-isolation Decision 2/5: which account a
+    /// request is for is the session's concern, not a settings pointer this call used to flip).
     pub fn restore_account(&self, account: &StoredAccount) -> rusqlite::Result<()> {
         let mut conn = self.0.lock().unwrap();
         let tx = conn.transaction()?;
+        let scope = account.id.as_str();
         tx.execute(
-            "INSERT INTO settings(key, value) VALUES('session_cookie', ?1)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            [&account.session_cookie],
+            "INSERT INTO settings(account_id, key, value) VALUES(?1, 'session_cookie', ?2)
+             ON CONFLICT(account_id, key) DO UPDATE SET value = excluded.value",
+            [scope, &account.session_cookie],
         )?;
         for (key, value) in [
             ("data_sync_id", account.data_sync_id.as_deref()),
@@ -606,30 +696,33 @@ impl Db {
             match value {
                 Some(value) => {
                     tx.execute(
-                        "INSERT INTO settings(key, value) VALUES(?1, ?2)
-                         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                        [key, value],
+                        "INSERT INTO settings(account_id, key, value) VALUES(?1, ?2, ?3)
+                         ON CONFLICT(account_id, key) DO UPDATE SET value = excluded.value",
+                        [scope, key, value],
                     )?;
                 }
                 None => {
-                    tx.execute("DELETE FROM settings WHERE key = ?1", [key])?;
+                    tx.execute(
+                        "DELETE FROM settings WHERE account_id = ?1 AND key = ?2",
+                        [scope, key],
+                    )?;
                 }
             }
         }
         tx.execute(
-            "INSERT INTO settings(key, value) VALUES('active_account', ?1)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            [&account.id],
+            "DELETE FROM settings WHERE account_id = ?1 AND key = 'account_selection_pending'",
+            [scope],
         )?;
-        tx.execute("DELETE FROM settings WHERE key = 'account_selection_pending'", [])?;
         tx.commit()
     }
 
-    pub fn all_settings(&self) -> Vec<(String, String)> {
+    pub fn all_settings(&self, account_id: &str) -> Vec<(String, String)> {
         let conn = self.0.lock().unwrap();
         let mut out = Vec::new();
-        if let Ok(mut stmt) = conn.prepare("SELECT key, value FROM settings") {
-            if let Ok(rows) = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))) {
+        if let Ok(mut stmt) =
+            conn.prepare("SELECT key, value FROM settings WHERE account_id = ?1")
+        {
+            if let Ok(rows) = stmt.query_map([account_id], |r| Ok((r.get(0)?, r.get(1)?))) {
                 out.extend(rows.flatten());
             }
         }
@@ -747,48 +840,58 @@ impl Db {
     /// Record one completed play and drop everything that has fallen out of the window, so the
     /// table stays bounded at roughly a month of listening whether or not anyone opens the
     /// playlist. `song_json` is the serialized `SongItem`, kept per row so the playlist can be
-    /// rebuilt without asking YouTube for metadata it already gave us.
-    pub fn record_play(&self, video_id: &str, song_json: &str, now: i64, window: i64) {
+    /// rebuilt without asking YouTube for metadata it already gave us. `account_id` scopes the row
+    /// (openspec/changes/multi-user-isolation) — the prune below is scoped the same way, or one
+    /// account's plays aging out would delete another's rows that happen to share a timestamp.
+    pub fn record_play(&self, account_id: &str, video_id: &str, song_json: &str, now: i64, window: i64) {
         let conn = self.0.lock().unwrap();
         let _ = conn.execute(
-            "INSERT INTO plays(video_id, played_at, song_json) VALUES(?1, ?2, ?3)",
-            rusqlite::params![video_id, now, song_json],
+            "INSERT INTO plays(account_id, video_id, played_at, song_json) VALUES(?1, ?2, ?3, ?4)",
+            rusqlite::params![account_id, video_id, now, song_json],
         );
-        let _ = conn.execute("DELETE FROM plays WHERE played_at < ?1", [now - window]);
+        let _ = conn.execute(
+            "DELETE FROM plays WHERE account_id = ?1 AND played_at < ?2",
+            rusqlite::params![account_id, now - window],
+        );
     }
 
-    /// The most-played songs since `since`, as `(song_json, play_count)` ranked by plays and then
-    /// by recency. Each row's JSON comes from that song's latest play: SQLite resolves a bare
-    /// column against the row matching the single `max()` in the query.
-    pub fn top_plays(&self, since: i64, limit: usize) -> Vec<(String, i64)> {
+    /// The most-played songs since `since` for `account_id`, as `(song_json, play_count)` ranked by
+    /// plays and then by recency. Each row's JSON comes from that song's latest play: SQLite
+    /// resolves a bare column against the row matching the single `max()` in the query.
+    pub fn top_plays(&self, account_id: &str, since: i64, limit: usize) -> Vec<(String, i64)> {
         let conn = self.0.lock().unwrap();
         let mut out = Vec::new();
         if let Ok(mut stmt) = conn.prepare(
             "SELECT song_json, COUNT(*) AS plays, MAX(played_at) AS last FROM plays
-             WHERE played_at >= ?1
+             WHERE account_id = ?1 AND played_at >= ?2
              GROUP BY video_id
              ORDER BY plays DESC, last DESC
-             LIMIT ?2",
+             LIMIT ?3",
         ) {
-            if let Ok(rows) = stmt
-                .query_map(rusqlite::params![since, limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))
-            {
+            if let Ok(rows) = stmt.query_map(
+                rusqlite::params![account_id, since, limit as i64],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            ) {
                 out.extend(rows.flatten());
             }
         }
         out
     }
 
-    /// Play count per videoId since `since`. [`Db::top_plays`] answers "what are my 20 most played
-    /// songs"; this answers "how many times have I played each of these", which is what sorting an
-    /// arbitrary playlist by plays needs. Same table, so the same trailing window applies.
-    pub fn play_counts(&self, since: i64) -> Vec<(String, i64)> {
+    /// Play count per videoId since `since` for `account_id`. [`Db::top_plays`] answers "what are
+    /// my 20 most played songs"; this answers "how many times have I played each of these", which
+    /// is what sorting an arbitrary playlist by plays needs. Same table, so the same trailing
+    /// window applies.
+    pub fn play_counts(&self, account_id: &str, since: i64) -> Vec<(String, i64)> {
         let conn = self.0.lock().unwrap();
         let mut out = Vec::new();
-        if let Ok(mut stmt) = conn
-            .prepare("SELECT video_id, COUNT(*) FROM plays WHERE played_at >= ?1 GROUP BY video_id")
-        {
-            if let Ok(rows) = stmt.query_map([since], |r| Ok((r.get(0)?, r.get(1)?))) {
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT video_id, COUNT(*) FROM plays WHERE account_id = ?1 AND played_at >= ?2
+             GROUP BY video_id",
+        ) {
+            if let Ok(rows) = stmt.query_map(rusqlite::params![account_id, since], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            }) {
                 out.extend(rows.flatten());
             }
         }
@@ -1194,10 +1297,10 @@ mod tests {
         ] {
             // A window wide enough that inserting doesn't prune what the next row needs; the
             // "old" row is excluded by `since` below instead.
-            d.record_play(id, json, at, 10_000);
+            d.record_play("acct", id, json, at, 10_000);
         }
 
-        let top = d.top_plays(900, 20);
+        let top = d.top_plays("acct", 900, 20);
         assert_eq!(
             top,
             vec![
@@ -1207,14 +1310,14 @@ mod tests {
             ],
             "'old' is outside the window and must not appear"
         );
-        assert_eq!(d.top_plays(900, 2).len(), 2, "limit applies");
+        assert_eq!(d.top_plays("acct", 900, 2).len(), 2, "limit applies");
 
         // Same rows through `play_counts`: every song, not a top N, and no metadata.
-        let mut counts = d.play_counts(900);
+        let mut counts = d.play_counts("acct", 900);
         counts.sort();
         assert_eq!(counts, vec![("a".into(), 2), ("b".into(), 3), ("c".into(), 1)]);
         assert!(
-            d.play_counts(1_500) == vec![("c".into(), 1)],
+            d.play_counts("acct", 1_500) == vec![("c".into(), 1)],
             "`since` cuts the same way it does for top_plays"
         );
     }
@@ -1239,13 +1342,13 @@ mod tests {
             let mode: String =
                 d.0.lock().unwrap().query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
             assert_eq!(mode, "wal");
-            d.record_play("LOCAL:/music/a.mp3", "{\"local\":1}", 1_000, 10_000);
-            d.record_play("dQw4w9WgXcQ", "{\"yt\":1}", 1_000, 10_000);
-            assert_eq!(d.top_plays(0, 20).len(), 2, "both were recorded");
+            d.record_play("acct", "LOCAL:/music/a.mp3", "{\"local\":1}", 1_000, 10_000);
+            d.record_play("acct", "dQw4w9WgXcQ", "{\"yt\":1}", 1_000, 10_000);
+            assert_eq!(d.top_plays("acct", 0, 20).len(), 2, "both were recorded");
         }
         let d = Db::open(&path).unwrap();
         assert_eq!(
-            d.top_plays(0, 20),
+            d.top_plays("acct", 0, 20),
             vec![("{\"yt\":1}".to_string(), 1)],
             "only the YouTube play survives"
         );
@@ -1260,9 +1363,19 @@ mod tests {
         let path = std::env::temp_dir().join("limusic-lyrics-providers-test.sqlite");
         std::fs::remove_file(&path).ok();
         {
-            let d = Db::open(&path).unwrap();
-            let conn = d.0.lock().unwrap();
-            conn.execute_batch("PRAGMA user_version = 1").unwrap();
+            // Raw `rusqlite`, not `Db::open` — the `lyrics_boidu` migration below runs on a file
+            // that genuinely predates the `account_id` column (`version < 2` runs before
+            // `version < 3`'s rebuild), so the seed has to be 2-column `settings` too, or this
+            // doesn't exercise the real upgrade path at all.
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 CREATE TABLE lyrics_cache (
+                     video_id TEXT PRIMARY KEY, lyrics TEXT, fetched_at INTEGER NOT NULL
+                 );
+                 PRAGMA user_version = 1;",
+            )
+            .unwrap();
             conn.execute("INSERT INTO settings(key, value) VALUES('lyrics_boidu', 'false')", [])
                 .unwrap();
             conn.execute(
@@ -1272,8 +1385,10 @@ mod tests {
             .unwrap();
         }
         let d = Db::open(&path).unwrap();
-        assert_eq!(d.get_setting("lyrics_providers").as_deref(), Some("-boidu"));
-        assert_eq!(d.get_setting("lyrics_boidu"), None);
+        // `lyrics_providers`/`lyrics_boidu` are global (openspec/changes/multi-user-isolation
+        // Decision 2) — `GLOBAL_ACCOUNT` is `""`, matching the row seeded above.
+        assert_eq!(d.get_setting(GLOBAL_ACCOUNT, "lyrics_providers").as_deref(), Some("-boidu"));
+        assert_eq!(d.get_setting(GLOBAL_ACCOUNT, "lyrics_boidu"), None);
         assert_eq!(d.get_lyrics("old", 2, 10), None, "purged once");
 
         d.put_lyrics("auto", Some("{\"source\":\"LRCLIB\"}"), 2);
@@ -1379,9 +1494,9 @@ mod tests {
     #[test]
     fn record_play_prunes_outside_the_window() {
         let d = db();
-        d.record_play("stale", "{}", 1_000, 60);
-        d.record_play("fresh", "{}", 5_000, 60); // prunes anything before 4_940
-        assert_eq!(d.top_plays(0, 20), vec![("{}".to_string(), 1)]);
+        d.record_play("acct", "stale", "{}", 1_000, 60);
+        d.record_play("acct", "fresh", "{}", 5_000, 60); // prunes anything before 4_940
+        assert_eq!(d.top_plays("acct", 0, 20), vec![("{}".to_string(), 1)]);
     }
 
     /// The key follows the Google account, not the jar: the `__Secure-3PAPISID` alias resolves to
@@ -1454,11 +1569,11 @@ mod tests {
         assert_eq!(d.list_accounts().len(), 1);
     }
 
-    /// Switching to a saved account flips the `active_account` pointer in the same transaction as
-    /// the restored projections, so a crash between them can't leave the pointer disagreeing with
-    /// the projections a restart will actually use.
+    /// Switching to a saved account writes its projections scoped to its own `account.id`
+    /// (openspec/changes/multi-user-isolation Decision 2/5 — no global "active" pointer any more;
+    /// which account a request is for is the session's concern), not some other account's rows.
     #[test]
-    fn restore_account_moves_the_active_pointer_with_the_projections() {
+    fn restore_account_scopes_projections_to_its_own_id() {
         let d = db();
         let account = StoredAccount {
             id: account_key("SAPISID=bbb").unwrap(),
@@ -1470,23 +1585,25 @@ mod tests {
             added_at: 200,
         };
         d.upsert_account(&account).unwrap();
-        d.set_setting("active_account", &account_key("SAPISID=aaa").unwrap());
+        // A different account's row must be untouched by restoring this one.
+        let other = account_key("SAPISID=aaa").unwrap();
+        d.set_setting(&other, "session_cookie", "SAPISID=aaa");
 
         d.restore_account(&account).unwrap();
+        assert_eq!(d.get_setting(&account.id, "session_cookie").as_deref(), Some("SAPISID=bbb"));
+        assert_eq!(d.get_setting(&account.id, "data_sync_id").as_deref(), Some("channel-b"));
         assert_eq!(
-            d.get_setting("active_account").as_deref(),
-            Some(account.id.as_str()),
-            "the pointer flips alongside the restored projections"
-        );
-        assert_eq!(d.get_setting("session_cookie").as_deref(), Some("SAPISID=bbb"));
-        assert_eq!(d.get_setting("data_sync_id").as_deref(), Some("channel-b"));
-        assert_eq!(
-            d.get_setting("selected_identity_json").as_deref(),
+            d.get_setting(&account.id, "selected_identity_json").as_deref(),
             Some(r#"{"data_sync_id":"channel-b"}"#)
         );
-        assert_eq!(d.get_setting("account_json").as_deref(), Some(r#"{"name":"B"}"#));
-        assert_eq!(d.get_setting("visitor_data").as_deref(), Some("vd-b"));
-        assert_eq!(d.get_setting("account_selection_pending"), None);
+        assert_eq!(d.get_setting(&account.id, "account_json").as_deref(), Some(r#"{"name":"B"}"#));
+        assert_eq!(d.get_setting(&account.id, "visitor_data").as_deref(), Some("vd-b"));
+        assert_eq!(d.get_setting(&account.id, "account_selection_pending"), None);
+        assert_eq!(
+            d.get_setting(&other, "session_cookie").as_deref(),
+            Some("SAPISID=aaa"),
+            "restoring one account must not touch another's row"
+        );
     }
 
     /// Rows filed under a key the current `account_key` no longer computes (the pre-release SHA-1
@@ -1514,11 +1631,6 @@ mod tests {
                 )
                 .unwrap();
             }
-            conn.execute(
-                "INSERT INTO settings(key, value) VALUES('active_account', 'ga-stalebbb')",
-                [],
-            )
-            .unwrap();
         }
         {
             let d = Db::open(&path).unwrap();
@@ -1528,11 +1640,6 @@ mod tests {
             assert_eq!(a.added_at, 100, "the surviving row keeps the earlier place in the list");
             let b = account_key("SAPISID=bbb").unwrap();
             assert!(d.get_account(&b).is_some(), "a stale id with no canonical row is moved");
-            assert_eq!(
-                d.get_setting("active_account").as_deref(),
-                Some(b.as_str()),
-                "the active pointer follows the move"
-            );
         }
         std::fs::remove_file(&path).ok();
     }
@@ -1544,10 +1651,10 @@ mod tests {
         std::fs::remove_file(&path).ok();
         {
             let d = Db::open(&path).unwrap();
-            d.set_setting("session_cookie", "SAPISID=legacy");
-            d.set_setting("data_sync_id", "channel-x");
-            d.set_setting("account_json", r#"{"name":"Legacy"}"#);
-            d.set_setting("visitor_data", "vd-x");
+            d.set_setting("acct", "session_cookie", "SAPISID=legacy");
+            d.set_setting("acct", "data_sync_id", "channel-x");
+            d.set_setting("acct", "account_json", r#"{"name":"Legacy"}"#);
+            d.set_setting("acct", "visitor_data", "vd-x");
         }
         {
             let d = Db::open(&path).unwrap();
@@ -1555,11 +1662,6 @@ mod tests {
             assert_eq!(accounts.len(), 1);
             assert_eq!(accounts[0].session_cookie, "SAPISID=legacy");
             assert_eq!(accounts[0].data_sync_id.as_deref(), Some("channel-x"));
-            assert_eq!(
-                d.get_setting("active_account").as_deref(),
-                Some(accounts[0].id.as_str()),
-                "the migrated session is the active account"
-            );
         }
         std::fs::remove_file(&path).ok();
     }
@@ -1581,10 +1683,10 @@ mod tests {
             let (d, aside) = Db::open_or_quarantine(&path).unwrap();
             let aside = aside.expect("a corrupt file is moved aside");
             assert_eq!(std::fs::read(&aside).unwrap(), b"this is not a sqlite file");
-            d.set_setting("k", "v");
+            d.set_setting("acct", "k", "v");
         }
         let d = Db::open(&path).unwrap();
-        assert_eq!(d.get_setting("k").as_deref(), Some("v"), "the fresh file is a working db");
+        assert_eq!(d.get_setting("acct", "k").as_deref(), Some("v"), "the fresh file is a working db");
         drop(d);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1595,10 +1697,10 @@ mod tests {
     fn open_or_quarantine_leaves_a_healthy_file_alone() {
         let dir = qtest_dir("healthy");
         let path = dir.join("limusic.sqlite");
-        Db::open(&path).unwrap().set_setting("k", "v");
+        Db::open(&path).unwrap().set_setting("acct", "k", "v");
         let (d, aside) = Db::open_or_quarantine(&path).unwrap();
         assert_eq!(aside, None);
-        assert_eq!(d.get_setting("k").as_deref(), Some("v"));
+        assert_eq!(d.get_setting("acct", "k").as_deref(), Some("v"));
         let moved = std::fs::read_dir(&dir)
             .unwrap()
             .flatten()
@@ -1922,8 +2024,8 @@ mod tests {
 
         // Checkpoint 3: the user's history and library come through untouched, except the local
         // play, which `open` removes on purpose (On Repeat excludes local files since 0.3.1).
-        assert_eq!(d.get_setting("volume").as_deref(), Some("0.42"), "{tag}");
-        assert_eq!(d.top_plays(0, 20), vec![(r#"{"yt":1}"#.to_string(), 1)], "{tag}");
+        assert_eq!(d.get_setting(id.as_str(), "volume").as_deref(), Some("0.42"), "{tag}");
+        assert_eq!(d.top_plays(id.as_str(), 0, 20), vec![(r#"{"yt":1}"#.to_string(), 1)], "{tag}");
         let tracks = d.local_tracks(None);
         assert_eq!(tracks.len(), 1, "{tag}");
         assert_eq!((tracks[0].path.as_str(), tracks[0].title.as_str()), ("/music/a.mp3", "A"));
@@ -1953,8 +2055,7 @@ mod tests {
         if migrated_account {
             assert_eq!(a.added_at, 100, "{tag}: an existing account row was rewritten");
         }
-        assert_eq!(d.get_setting("active_account").as_deref(), Some(id.as_str()), "{tag}");
-        assert_eq!(d.get_setting("session_cookie").as_deref(), Some(LEGACY_COOKIE), "{tag}");
+        assert_eq!(d.get_setting(id.as_str(), "session_cookie").as_deref(), Some(LEGACY_COOKIE), "{tag}");
         drop(d);
 
         // Checkpoint 5: the wipes are one-shot. They key off an ALTER succeeding, so if one ever
@@ -1986,44 +2087,61 @@ mod tests {
     fn auth_identity_projections_are_updated_and_cleared_together() {
         let d = db();
         d.set_auth_identity(
+            "acct",
             "SAPISID=cookie-a",
             r#"{"data_sync_id":"channel-a"}"#,
             Some("channel-a"),
             r#"{"name":"Channel A"}"#,
         )
         .unwrap();
-        assert_eq!(d.get_setting("data_sync_id").as_deref(), Some("channel-a"));
+        assert_eq!(d.get_setting("acct", "data_sync_id").as_deref(), Some("channel-a"));
         assert_eq!(
-            d.get_setting("selected_identity_json").as_deref(),
+            d.get_setting("acct", "selected_identity_json").as_deref(),
             Some(r#"{"data_sync_id":"channel-a"}"#)
         );
-        assert_eq!(d.get_setting("account_json").as_deref(), Some(r#"{"name":"Channel A"}"#));
-        assert_eq!(d.get_setting("session_cookie").as_deref(), Some("SAPISID=cookie-a"));
+        assert_eq!(d.get_setting("acct", "account_json").as_deref(), Some(r#"{"name":"Channel A"}"#));
+        assert_eq!(d.get_setting("acct", "session_cookie").as_deref(), Some("SAPISID=cookie-a"));
 
-        d.set_pending_auth_selection("SAPISID=cookie-b", None).unwrap();
-        assert_eq!(d.get_setting("session_cookie").as_deref(), Some("SAPISID=cookie-b"));
-        assert_eq!(d.get_setting("selected_identity_json"), None);
-        assert_eq!(d.get_setting("data_sync_id"), None);
-        assert_eq!(d.get_setting("account_json"), None);
-        assert_eq!(d.get_setting("account_selection_pending").as_deref(), Some("true"));
-
-        d.set_pending_auth_selection("SAPISID=cookie-c", Some("ga-c")).unwrap();
-        assert_eq!(d.get_setting("active_account").as_deref(), Some("ga-c"));
+        d.set_pending_auth_selection("acct", "SAPISID=cookie-b").unwrap();
+        assert_eq!(d.get_setting("acct", "session_cookie").as_deref(), Some("SAPISID=cookie-b"));
+        assert_eq!(d.get_setting("acct", "selected_identity_json"), None);
+        assert_eq!(d.get_setting("acct", "data_sync_id"), None);
+        assert_eq!(d.get_setting("acct", "account_json"), None);
+        assert_eq!(d.get_setting("acct", "account_selection_pending").as_deref(), Some("true"));
 
         d.set_auth_identity(
+            "acct",
             "SAPISID=cookie-b",
             r#"{"data_sync_id":null}"#,
             None,
             r#"{"name":"Single channel"}"#,
         )
         .unwrap();
-        assert_eq!(d.get_setting("data_sync_id"), None, "a stale delegated id must be deleted");
-        assert_eq!(d.get_setting("account_selection_pending"), None);
+        assert_eq!(d.get_setting("acct", "data_sync_id"), None, "a stale delegated id must be deleted");
+        assert_eq!(d.get_setting("acct", "account_selection_pending"), None);
 
-        d.clear_auth_identity().unwrap();
-        assert_eq!(d.get_setting("selected_identity_json"), None);
-        assert_eq!(d.get_setting("data_sync_id"), None);
-        assert_eq!(d.get_setting("account_json"), None);
+        d.clear_auth_identity("acct").unwrap();
+        assert_eq!(d.get_setting("acct", "selected_identity_json"), None);
+        assert_eq!(d.get_setting("acct", "data_sync_id"), None);
+        assert_eq!(d.get_setting("acct", "account_json"), None);
+    }
+
+    /// openspec/changes/multi-user-isolation: the same operations scoped to two different accounts
+    /// must not see or clobber each other's rows.
+    #[test]
+    fn auth_identity_projections_are_isolated_per_account() {
+        let d = db();
+        d.set_auth_identity("acct-a", "SAPISID=a", "{}", None, r#"{"name":"A"}"#).unwrap();
+        d.set_auth_identity("acct-b", "SAPISID=b", "{}", None, r#"{"name":"B"}"#).unwrap();
+        assert_eq!(d.get_setting("acct-a", "account_json").as_deref(), Some(r#"{"name":"A"}"#));
+        assert_eq!(d.get_setting("acct-b", "account_json").as_deref(), Some(r#"{"name":"B"}"#));
+        d.clear_auth_identity("acct-a").unwrap();
+        assert_eq!(d.get_setting("acct-a", "account_json"), None);
+        assert_eq!(
+            d.get_setting("acct-b", "account_json").as_deref(),
+            Some(r#"{"name":"B"}"#),
+            "clearing one account must not clear another's"
+        );
     }
 }
 

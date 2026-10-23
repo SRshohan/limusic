@@ -184,7 +184,9 @@ function getEngine(): AudioEngine {
 		});
 		engine.addEventListener('advanced', () => void onAdvanced());
 		engine.addEventListener('ended', () => void onEndedWithoutPreload());
-		engine.addEventListener('error', () => void onTrackFailed());
+		engine.addEventListener('error', (e) =>
+			void onTrackFailed((e as CustomEvent<{ message: string }>).detail?.message)
+		);
 		bindMediaSession(engine, { next: () => void nextTrack(), prev: () => void prevTrack() });
 	}
 	return engine;
@@ -317,10 +319,20 @@ async function onEndedWithoutPreload() {
 	await playCurrent(true);
 }
 
-async function onTrackFailed() {
+async function onTrackFailed(message?: string) {
+	// This is the `<audio>` element's own `error` event (a decode/network failure once a stream URL
+	// was already loaded) — distinct from `playCurrent`'s try/catch above, which only covers a
+	// failure to *resolve* that URL in the first place. This path had no toast at all: a track that
+	// failed here skipped silently, and with nothing left in the queue the skip was a no-op too — so
+	// playback just went quiet with `playback.paused` still reporting "playing" and no indication
+	// anything had gone wrong (reported as "the queue doesn't work" / "nothing is playing" on iOS).
+	toast.error(message || 'Playback failed');
 	// Skip a track that failed to resolve/play rather than stall the queue on it.
 	const next = nextIndexFor(currentIndex);
-	if (next === null) return;
+	if (next === null) {
+		playback.paused = true;
+		return;
+	}
 	currentIndex = next;
 	await playCurrent(true);
 }

@@ -1,6 +1,7 @@
 // Stream resolution + proxy routes (openspec/changes/http-audio-streaming, tasks 4.4-4.5;
 // openspec/changes/multi-user-isolation task 5.3/5.4 account-scoped the cache keys and the
 // watch-history ping).
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{
@@ -11,9 +12,9 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use innertube::AudioQuality;
+use innertube::{AudioQuality, InnerTube};
 use limusic_core::media::{audio_proxy, orchestrator::ResolveError, video_proxy};
-use limusic_core::state::ANONYMOUS;
+use limusic_core::state::{AccountSession, Shared, ANONYMOUS};
 use serde::{Deserialize, Serialize};
 
 use crate::session::RequireSession;
@@ -49,6 +50,42 @@ struct ResolveResponse {
     stream_client: String,
 }
 
+/// These routes have no `RequireSession` gate — an anonymous browser tab can resolve/stream just
+/// as it always could — but they must still use *the caller's own* signed-in identity when the
+/// request carries a valid session cookie. Under the old single-account-per-process model there
+/// was only ever one `InnerTube` for the whole server, so every caller implicitly got the benefit
+/// of whichever one account was signed in; splitting that into one `AccountSession` per
+/// concurrently signed-in account (openspec/changes/multi-user-isolation) means a caller with no
+/// session of their own now needs an explicit "my session if I have one, else anonymous" lookup
+/// instead of silently losing the authenticated unlock WEB_REMIX and friends require.
+enum Caller {
+    SignedIn(Arc<AccountSession>),
+    Anonymous,
+}
+
+impl Caller {
+    fn resolve(state: &ServerState, headers: &HeaderMap) -> Self {
+        match crate::session::optional_account(state, headers) {
+            Some(account) => Caller::SignedIn(account),
+            None => Caller::Anonymous,
+        }
+    }
+
+    fn account_key(&self) -> &str {
+        match self {
+            Caller::SignedIn(account) => &account.account_key,
+            Caller::Anonymous => ANONYMOUS,
+        }
+    }
+
+    fn it<'a>(&'a self, shared: &'a Shared) -> &'a InnerTube {
+        match self {
+            Caller::SignedIn(account) => &account.it,
+            Caller::Anonymous => &shared.anonymous_it,
+        }
+    }
+}
+
 fn parse_quality(q: Option<&str>) -> AudioQuality {
     match q.map(str::to_ascii_uppercase).as_deref() {
         Some("LOW") => AudioQuality::Low,
@@ -69,31 +106,30 @@ fn resolve_err(e: ResolveError) -> ApiError {
     (status, e.to_string())
 }
 
-/// This route is anonymous today (no `RequireSession`) — every caller shares the one `ANONYMOUS`
-/// cache key (openspec/changes/multi-user-isolation task 5.3). A later change that gates playback
-/// behind a session would thread the caller's real `account_key` through here instead.
 async fn resolve(
     State(state): State<ServerState>,
     Query(params): Query<ResolveParams>,
+    headers: HeaderMap,
 ) -> Result<Json<ResolveResponse>, ApiError> {
     let video_id = params.video_id.trim();
     if video_id.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "missing or empty `videoId` query parameter".to_owned()));
     }
+    let caller = Caller::resolve(&state, &headers);
     let quality = parse_quality(params.quality.as_deref());
     let is_upload = params.is_upload.unwrap_or(false);
-    let disabled = state.shared.disabled_clients(ANONYMOUS);
+    let disabled = state.shared.disabled_clients(caller.account_key());
 
     let data = state
         .shared
         .orchestrator
-        .resolve(&state.shared.anonymous_it, video_id, is_upload, quality, &disabled)
+        .resolve(caller.it(&state.shared), video_id, is_upload, quality, &disabled)
         .await
         .map_err(resolve_err)?;
 
     let expires_in = Duration::from_secs(data.expires_in_seconds.max(0) as u64);
     audio_proxy::register(
-        ANONYMOUS,
+        caller.account_key(),
         video_id,
         &data.stream_url,
         data.headers.clone(),
@@ -106,9 +142,9 @@ async fn resolve(
     let video_url = state
         .shared
         .orchestrator
-        .resolve_video(&state.shared.anonymous_it, video_id, 1080, &disabled)
+        .resolve_video(caller.it(&state.shared), video_id, 1080, &disabled)
         .await
-        .inspect(|url| video_proxy::register(ANONYMOUS, video_id, url, expires_in));
+        .inspect(|url| video_proxy::register(caller.account_key(), video_id, url, expires_in));
 
     Ok(Json(ResolveResponse {
         video_id: data.video_id,
@@ -131,16 +167,29 @@ async fn resolve(
 /// stored setting and `is_upload: false`. A real upload whose cache entry expired re-resolves as
 /// an ordinary track and fails cleanly rather than silently misbehaving; the frontend re-calls
 /// `/api/playback/resolve` on a proxy error anyway, which re-establishes the correct cache entry.
-async fn reresolve_audio(state: &ServerState, video_id: &str) -> Option<()> {
-    let disabled = state.shared.disabled_clients(ANONYMOUS);
+async fn reresolve_audio(state: &ServerState, video_id: &str, caller: &Caller) -> Option<()> {
+    let disabled = state.shared.disabled_clients(caller.account_key());
     let data = state
         .shared
         .orchestrator
-        .resolve(&state.shared.anonymous_it, video_id, false, state.shared.quality(ANONYMOUS), &disabled)
+        .resolve(
+            caller.it(&state.shared),
+            video_id,
+            false,
+            state.shared.quality(caller.account_key()),
+            &disabled,
+        )
         .await
         .ok()?;
     let expires_in = Duration::from_secs(data.expires_in_seconds.max(0) as u64);
-    audio_proxy::register(ANONYMOUS, video_id, &data.stream_url, data.headers, expires_in, data.playback_ping);
+    audio_proxy::register(
+        caller.account_key(),
+        video_id,
+        &data.stream_url,
+        data.headers,
+        expires_in,
+        data.playback_ping,
+    );
     Some(())
 }
 
@@ -149,11 +198,12 @@ async fn stream_audio(
     Path(video_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
+    let caller = Caller::resolve(&state, &headers);
     let range = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
-    let mut info = audio_proxy::serve_info(ANONYMOUS, &video_id, range).await;
+    let mut info = audio_proxy::serve_info(caller.account_key(), &video_id, range).await;
     if info.is_none() {
-        reresolve_audio(&state, &video_id).await;
-        info = audio_proxy::serve_info(ANONYMOUS, &video_id, range).await;
+        reresolve_audio(&state, &video_id, &caller).await;
+        info = audio_proxy::serve_info(caller.account_key(), &video_id, range).await;
     }
     let Some((reg, serve)) = info else {
         return Err(StatusCode::NOT_FOUND);
@@ -186,13 +236,14 @@ async fn stream_video(
     Path(video_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
-    let mut url = video_proxy::get(ANONYMOUS, &video_id);
+    let caller = Caller::resolve(&state, &headers);
+    let mut url = video_proxy::get(caller.account_key(), &video_id);
     if url.is_none() {
-        let disabled = state.shared.disabled_clients(ANONYMOUS);
+        let disabled = state.shared.disabled_clients(caller.account_key());
         if let Some(u) =
-            state.shared.orchestrator.resolve_video(&state.shared.anonymous_it, &video_id, 1080, &disabled).await
+            state.shared.orchestrator.resolve_video(caller.it(&state.shared), &video_id, 1080, &disabled).await
         {
-            video_proxy::register(ANONYMOUS, &video_id, &u, Duration::from_secs(3600));
+            video_proxy::register(caller.account_key(), &video_id, &u, Duration::from_secs(3600));
             url = Some(u);
         }
     }
@@ -219,6 +270,54 @@ async fn stream_video(
     response
         .body(Body::from_stream(stream))
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::{AccountRegistry, SessionStore, SESSION_COOKIE};
+
+    /// Regression test for exactly the bug this module shipped once already (openspec/changes/
+    /// multi-user-isolation): `resolve`/`stream_*` hardcoded the `ANONYMOUS` key and the shared
+    /// anonymous `InnerTube` for every caller, so a signed-in user's own session was silently
+    /// ignored and every resolve ran as a logged-out client — failing with YouTube's bot-check on
+    /// any client that requires a real login. `Caller::resolve` must pick the caller's own session
+    /// when their request cookie names one, and only fall back to anonymous when it doesn't.
+    #[tokio::test]
+    async fn caller_resolve_uses_the_requests_own_session_when_it_has_one() {
+        let db = Arc::new(limusic_core::db::Db::open(std::path::Path::new(":memory:")).unwrap());
+        let lastfm = limusic_core::lastfm::spawn(None);
+        let app_data_dir = std::env::temp_dir().join(format!(
+            "limusic-server-media-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&app_data_dir).unwrap();
+        let shared = Arc::new(Shared::new(innertube::Clients::bundled(), db, lastfm, &app_data_dir));
+
+        let accounts = Arc::new(AccountRegistry::default());
+        let sessions = Arc::new(SessionStore::default());
+        let account = AccountSession::anonymous("acct-signed-in".to_owned());
+        account.it.set_cookie(Some("SAPISID=acct-signed-in; SID=fake".to_owned()));
+        let account = accounts.insert(account);
+        let session_id = sessions.create(account.account_key.clone());
+
+        let state = ServerState { shared, accounts, sessions };
+
+        let mut signed_in_headers = HeaderMap::new();
+        signed_in_headers
+            .insert(header::COOKIE, format!("{SESSION_COOKIE}={session_id}").parse().unwrap());
+        match Caller::resolve(&state, &signed_in_headers) {
+            Caller::SignedIn(resolved) => {
+                assert_eq!(resolved.account_key, "acct-signed-in");
+                assert!(resolved.it.is_logged_in(), "must resolve to the caller's own logged-in session");
+            }
+            Caller::Anonymous => panic!("a request carrying a valid session cookie must not resolve as anonymous"),
+        }
+
+        let no_cookie_headers = HeaderMap::new();
+        assert!(matches!(Caller::resolve(&state, &no_cookie_headers), Caller::Anonymous));
+    }
 }
 
 #[derive(Deserialize)]

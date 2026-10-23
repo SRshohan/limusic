@@ -53,8 +53,8 @@ async fn sign_in(
 /// already holding a session. Unlike every gated route below, this can't use `RequireSession`
 /// (it must also answer when there's no session at all), so it resolves the optional session by
 /// hand.
-async fn get_account(State(state): State<ServerState>, request: axum::extract::Request) -> Json<serde_json::Value> {
-    let account = optional_session(&state, &request);
+async fn get_account(State(state): State<ServerState>, headers: axum::http::HeaderMap) -> Json<serde_json::Value> {
+    let account = crate::session::optional_account(&state, &headers);
     let scoped = account.as_ref().map(|account| Scoped { shared: &state.shared, account });
     Json(limusic_core::commands::auth::get_account(scoped.as_ref()).await)
 }
@@ -148,20 +148,6 @@ async fn remove_google_account(
     let scoped = session.scoped(&state);
     limusic_core::commands::auth::remove_google_account(&scoped, &body.id).await;
     StatusCode::NO_CONTENT
-}
-
-/// `get_account` is the one route that must answer even with no session at all, so it can't use
-/// the `RequireSession` extractor (which rejects that case). This mirrors `RequireSession`'s own
-/// cookie -> session id -> account_key -> live `AccountSession` resolution, but returns `None`
-/// instead of a rejection at any step.
-fn optional_session(
-    state: &ServerState,
-    request: &axum::extract::Request,
-) -> Option<std::sync::Arc<limusic_core::state::AccountSession>> {
-    let session_id = crate::session::session_id_from_headers(request.headers())?;
-    let account_key = state.sessions.account_key_for(&session_id)?;
-    let account = state.accounts.get(&account_key)?;
-    account.it.is_logged_in().then_some(account)
 }
 
 pub fn router() -> Router<ServerState> {

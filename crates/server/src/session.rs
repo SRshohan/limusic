@@ -144,6 +144,24 @@ impl FromRequestParts<crate::ServerState> for RequireSession {
     }
 }
 
+/// Resolves a request's session cookie to its live, signed-in `AccountSession` — or `None` if
+/// there isn't one, rather than rejecting like `RequireSession` does. For routes that must behave
+/// correctly whether or not the caller is signed in: `auth::get_account` (must still answer
+/// "signed out" with no session at all), and `media.rs`'s resolve/stream routes, which — under the
+/// old single-account-per-process model — implicitly always used the one signed-in identity the
+/// whole process happened to hold, signed-in callers and anonymous browser tabs alike. Keeping
+/// that same "use my own session when I have one" behavior per caller, now that there can be
+/// several different accounts' sessions at once, needs exactly this optional lookup.
+pub(crate) fn optional_account(
+    state: &crate::ServerState,
+    headers: &axum::http::HeaderMap,
+) -> Option<Arc<AccountSession>> {
+    let session_id = session_id_from_headers(headers)?;
+    let account_key = state.sessions.account_key_for(&session_id)?;
+    let account = state.accounts.get(&account_key)?;
+    account.it.is_logged_in().then_some(account)
+}
+
 /// Build the `Set-Cookie` header value for a freshly minted session id.
 pub(crate) fn session_cookie_header(session_id: &str) -> String {
     // `HttpOnly`: never readable from page JS (design.md's "Auth" decision). `SameSite=Lax`: sent

@@ -17,6 +17,25 @@ export const signInWithCookie: typeof webApi.signInWithCookie = isTauri
 	? () => Promise.reject(new Error('signInWithCookie: desktop uses the native Google sign-in instead'))
 	: webApi.signInWithCookie;
 
+/** Explicit offline downloads (mint-ui-redesign, specs/offline-downloads) are a browser-storage
+ *  (`yt-cache.ts`/IndexedDB) concept with no Tauri-side equivalent at all — desktop already caches
+ *  every stream to disk via mpv itself, unconditionally, so there's nothing here for it to opt into.
+ *  Unreachable on desktop (the Downloads page/download action are web-only UI) rather than
+ *  pretending to be cross-platform. */
+const downloadUnsupported = () =>
+	Promise.reject(new Error('offline downloads: desktop already caches every stream to disk'));
+export const downloadTrack: typeof webApi.downloadTrack = isTauri ? downloadUnsupported : webApi.downloadTrack;
+export const removeDownload: typeof webApi.removeDownload = isTauri ? downloadUnsupported : webApi.removeDownload;
+export const isDownloaded: typeof webApi.isDownloaded = isTauri
+	? () => Promise.resolve(false)
+	: webApi.isDownloaded;
+export const listDownloaded: typeof webApi.listDownloaded = isTauri
+	? () => Promise.resolve([])
+	: webApi.listDownloaded;
+export const downloadedBytes: typeof webApi.downloadedBytes = isTauri
+	? () => Promise.resolve(0)
+	: webApi.downloadedBytes;
+
 export const {
 	// commands (context/11)
 	search,

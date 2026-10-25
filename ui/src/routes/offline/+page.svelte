@@ -8,7 +8,7 @@
 	import OfflineTransport from '$lib/components/offline/OfflineTransport.svelte';
 </script>
 
-<svelte:head><title>Offline music — Limusic</title></svelte:head>
+<svelte:head><title>Offline music — SRMusic</title></svelte:head>
 
 <div class="mx-auto flex max-w-3xl flex-col gap-5 p-4 pb-32">
 	<div>

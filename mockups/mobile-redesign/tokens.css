@@ -1,0 +1,430 @@
+/* Limusic mobile redesign — mint design tokens.
+   Light mode: confident mint-teal accent on a near-white, mint-tinted neutral scale.
+   Dark mode: the "dark version" of mint — a near-black, mint-tinted foundation (same
+   structural pattern as Spotify's near-black-plus-one-bright-accent) with a brighter,
+   more saturated mint reserved for interactive/active elements so it still pops.
+   Toggle via [data-theme="dark"] on <html> — see theme.js. */
+
+:root {
+	--font: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+
+	--bg: #f6fbf9;
+	--surface: #ffffff;
+	--surface-alt: #eef6f2;
+	--surface-raised: #ffffff;
+	--border: #dceae4;
+	--text: #0b1f1a;
+	--text-muted: #5c7a70;
+	--text-faint: #8aa69c;
+
+	--primary: #0fa873;
+	--primary-strong: #0c8f62;
+	--primary-contrast: #ffffff;
+	--primary-tint: #dff5ec;
+
+	--danger: #d6484f;
+	--danger-tint: #fbe4e5;
+
+	--shadow-sm: 0 1px 2px rgba(11, 31, 26, 0.06);
+	--shadow-md: 0 8px 24px rgba(11, 31, 26, 0.1);
+	--radius: 16px;
+	--radius-pill: 999px;
+
+	--safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+:root[data-theme='dark'] {
+	--bg: #081512;
+	--surface: #0e211c;
+	--surface-alt: #122a23;
+	--surface-raised: #15302a;
+	--border: #1c382f;
+	--text: #eaf6f1;
+	--text-muted: #8fb3a6;
+	--text-faint: #5f7d74;
+
+	--primary: #35e8b0;
+	--primary-strong: #58f0c0;
+	--primary-contrast: #06241b;
+	--primary-tint: #123a2e;
+
+	--danger: #ff7a80;
+	--danger-tint: #3a1618;
+
+	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+	--shadow-md: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+* {
+	box-sizing: border-box;
+}
+html,
+body {
+	margin: 0;
+	padding: 0;
+}
+body {
+	background: #cfe3db;
+	font-family: var(--font);
+	color: var(--text);
+	-webkit-font-smoothing: antialiased;
+}
+:root[data-theme='dark'] body {
+	background: #04100d;
+}
+
+/* Phone frame: full-bleed on an actual phone, a centered card on a wider viewer. */
+.phone {
+	max-width: 430px;
+	margin: 0 auto;
+	min-height: 100vh;
+	min-height: 100dvh;
+	background: var(--bg);
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	overflow-x: hidden;
+}
+@media (min-width: 431px) {
+	.phone {
+		margin: 24px auto;
+		min-height: 844px;
+		height: 844px;
+		border-radius: 36px;
+		box-shadow: var(--shadow-md);
+		border: 8px solid #0b0b0b;
+	}
+}
+
+a {
+	color: inherit;
+	text-decoration: none;
+}
+button {
+	font-family: inherit;
+	cursor: pointer;
+	border: none;
+	background: none;
+	color: inherit;
+}
+
+/* --- theme toggle (test harness only, not part of the design) --- */
+.theme-toggle {
+	position: fixed;
+	top: 12px;
+	right: 12px;
+	z-index: 50;
+	width: 40px;
+	height: 40px;
+	border-radius: 999px;
+	background: var(--surface-raised);
+	border: 1px solid var(--border);
+	box-shadow: var(--shadow-sm);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 18px;
+}
+
+/* --- shared chrome: top header, bottom tab bar, mini player --- */
+.header {
+	padding: 20px 16px 12px;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+.brand {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	font-weight: 700;
+	font-size: 15px;
+}
+.brand-mark {
+	width: 30px;
+	height: 30px;
+	border-radius: 9px;
+	background: linear-gradient(135deg, var(--primary), var(--primary-strong));
+}
+.brand-mark[src] {
+	background: none;
+	border-radius: 22%;
+}
+
+/* Header avatar — the user's own initial, distinct from the app's brand-mark icon. */
+.avatar-circle {
+	width: 32px;
+	height: 32px;
+	border-radius: 999px;
+	background: linear-gradient(135deg, var(--primary), var(--primary-strong));
+	color: var(--primary-contrast);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-weight: 700;
+	font-size: 14px;
+	flex-shrink: 0;
+}
+
+.search-field {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	background: var(--surface-alt);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-pill);
+	padding: 10px 14px;
+	color: var(--text-muted);
+	font-size: 14px;
+}
+.search-field kbd {
+	margin-left: auto;
+	font-size: 10px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 2px 6px;
+	color: var(--text-faint);
+}
+
+.content {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 0 16px 16px;
+	display: flex;
+	flex-direction: column;
+	gap: 24px;
+}
+
+.section-title {
+	font-size: 17px;
+	font-weight: 700;
+	margin: 0 0 10px;
+}
+
+/* Scroll rail with edge fade — same mechanism validated in the real app's ChipRail.svelte. */
+.rail-wrap {
+	position: relative;
+	min-width: 0;
+}
+.rail {
+	display: flex;
+	gap: 8px;
+	overflow-x: auto;
+	scrollbar-width: none;
+	padding-bottom: 2px;
+}
+.rail::-webkit-scrollbar {
+	display: none;
+}
+.fade {
+	pointer-events: none;
+	position: absolute;
+	top: 0;
+	bottom: 2px;
+	width: 28px;
+	opacity: 0;
+	transition: opacity 0.15s ease;
+}
+.fade.visible {
+	opacity: 1;
+}
+.fade.left {
+	left: 0;
+	background: linear-gradient(to right, var(--bg), transparent);
+}
+.fade.right {
+	right: 0;
+	background: linear-gradient(to left, var(--bg), transparent);
+}
+
+.chip {
+	flex-shrink: 0;
+	white-space: nowrap;
+	padding: 8px 16px;
+	border-radius: var(--radius-pill);
+	font-size: 13px;
+	font-weight: 600;
+	background: var(--surface-alt);
+	color: var(--text-muted);
+	border: 1px solid transparent;
+}
+.chip.active {
+	background: var(--primary);
+	color: var(--primary-contrast);
+}
+
+.card-grid {
+	display: grid;
+	grid-template-columns: repeat(2, 1fr);
+	gap: 12px;
+}
+.card {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	overflow: hidden;
+	box-shadow: var(--shadow-sm);
+}
+.card-art {
+	aspect-ratio: 1;
+	width: 100%;
+}
+.card-body {
+	padding: 10px 12px 12px;
+}
+.card-title {
+	font-size: 13px;
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	line-height: 1.3;
+}
+.card-sub {
+	font-size: 12px;
+	color: var(--text-muted);
+	margin-top: 2px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.track-row {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 8px 4px;
+	border-radius: 12px;
+}
+.track-row.active {
+	background: var(--primary-tint);
+}
+.track-art {
+	width: 46px;
+	height: 46px;
+	border-radius: 10px;
+	flex-shrink: 0;
+}
+.track-meta {
+	min-width: 0;
+	flex: 1;
+}
+.track-title {
+	font-size: 14px;
+	font-weight: 600;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.track-row.active .track-title {
+	color: var(--primary-strong);
+}
+:root[data-theme='dark'] .track-row.active .track-title {
+	color: var(--primary);
+}
+.track-artist {
+	font-size: 12.5px;
+	color: var(--text-muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.track-duration {
+	font-size: 12px;
+	color: var(--text-faint);
+	flex-shrink: 0;
+}
+
+/* Mini player — safe-area aware, sits directly above the tab bar (or the screen edge when the
+   tab bar is hidden, e.g. the Now Playing view). */
+.mini-player {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 10px 14px;
+	background: var(--surface-raised);
+	border-top: 1px solid var(--border);
+}
+.mini-player .track-art {
+	width: 40px;
+	height: 40px;
+}
+.mini-controls {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+.icon-btn {
+	width: 38px;
+	height: 38px;
+	border-radius: 999px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 17px;
+	color: var(--text);
+}
+.icon-btn.primary {
+	background: var(--primary);
+	color: var(--primary-contrast);
+}
+.progress-track {
+	height: 2px;
+	background: var(--border);
+}
+.progress-fill {
+	height: 100%;
+	background: var(--primary);
+}
+
+.tab-bar {
+	display: flex;
+	border-top: 1px solid var(--border);
+	background: var(--surface);
+	padding-bottom: var(--safe-bottom);
+}
+.tab-bar a {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 3px;
+	padding: 8px 0 10px;
+	font-size: 10.5px;
+	font-weight: 600;
+	color: var(--text-faint);
+}
+.tab-bar a.active {
+	color: var(--primary-strong);
+}
+:root[data-theme='dark'] .tab-bar a.active {
+	color: var(--primary);
+}
+.tab-bar .tab-icon {
+	font-size: 19px;
+}
+
+/* --- art placeholders (no network images in a mockup) --- */
+.art-1 {
+	background: linear-gradient(135deg, #0fa873, #0b6b4b);
+}
+.art-2 {
+	background: linear-gradient(135deg, #58c9ff, #2a7bd1);
+}
+.art-3 {
+	background: linear-gradient(135deg, #ffb86b, #e0672c);
+}
+.art-4 {
+	background: linear-gradient(135deg, #c792ea, #7e4fae);
+}
+.art-5 {
+	background: linear-gradient(135deg, #ff8fa3, #d1456b);
+}
+.art-6 {
+	background: linear-gradient(135deg, #ffe066, #e0a62c);
+}

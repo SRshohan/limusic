@@ -1,0 +1,29 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+	<defs>
+		<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+			<stop offset="0%" stop-color="#35E8B0" />
+			<stop offset="100%" stop-color="#0C8F62" />
+		</linearGradient>
+		<linearGradient id="bar" x1="0" y1="0" x2="0" y2="1">
+			<stop offset="0%" stop-color="#FFFFFF" />
+			<stop offset="100%" stop-color="#EAFBF4" />
+		</linearGradient>
+	</defs>
+
+	<!-- iOS-style superellipse container -->
+	<rect width="512" height="512" rx="112" fill="url(#bg)" />
+
+	<!-- Subtle depth: a soft inner highlight, no skeuomorphic gloss -->
+	<rect width="512" height="256" rx="112" fill="#FFFFFF" opacity="0.06" />
+
+	<!-- Equalizer-bar glyph: immediately reads as "audio" at any size. Heights rise then fall in an
+	     asymmetric S-curve (short, taller, tallest, tall, short) rather than a plain mirrored EQ, as
+	     a quiet nod to the S/R initials without turning the mark into illegible lettering. -->
+	<g>
+		<rect x="120" y="248" width="40" height="112" rx="20" fill="url(#bar)" />
+		<rect x="186" y="200" width="40" height="160" rx="20" fill="url(#bar)" />
+		<rect x="252" y="140" width="40" height="220" rx="20" fill="url(#bar)" />
+		<rect x="318" y="180" width="40" height="180" rx="20" fill="url(#bar)" />
+		<rect x="384" y="228" width="40" height="132" rx="20" fill="url(#bar)" />
+	</g>
+</svg>

@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+	<title>SRMusic — Now Playing (mockup)</title>
+	<link rel="icon" href="assets/icon.svg" />
+	<link rel="stylesheet" href="tokens.css" />
+	<style>
+		.np-header {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			padding: 14px 16px 0;
+		}
+		.np-art-wrap {
+			padding: 18px 16px 10px;
+			display: flex;
+			justify-content: center;
+		}
+		.np-art {
+			width: min(58vw, 240px);
+			aspect-ratio: 1;
+			border-radius: 20px;
+			box-shadow: var(--shadow-md);
+		}
+		.np-meta {
+			padding: 4px 20px 14px;
+			text-align: center;
+		}
+		.np-title {
+			font-size: 19px;
+			font-weight: 800;
+		}
+		.np-artist {
+			font-size: 13.5px;
+			color: var(--text-muted);
+			margin-top: 2px;
+		}
+		.np-tabs {
+			display: flex;
+			gap: 8px;
+			padding: 0 16px 10px;
+		}
+		.np-tab {
+			flex: 1;
+			padding: 10px;
+			border-radius: var(--radius-pill);
+			background: var(--surface-alt);
+			color: var(--text-muted);
+			font-weight: 700;
+			font-size: 13.5px;
+			text-align: center;
+		}
+		.np-tab.active {
+			background: var(--primary-tint);
+			color: var(--primary-strong);
+		}
+		:root[data-theme='dark'] .np-tab.active {
+			color: var(--primary);
+		}
+		.np-panel {
+			flex: 1;
+			min-height: 0;
+			display: flex;
+			flex-direction: column;
+			padding: 0 16px 16px;
+		}
+		.np-list {
+			flex: 1;
+			min-height: 0;
+			overflow-y: auto;
+		}
+		.np-section-label {
+			font-size: 12px;
+			font-weight: 700;
+			text-transform: uppercase;
+			letter-spacing: 0.04em;
+			color: var(--text-faint);
+			margin: 10px 0 6px;
+		}
+		.back-to {
+			font-size: 12.5px;
+			color: var(--text-muted);
+			display: flex;
+			align-items: center;
+			gap: 6px;
+			margin-bottom: 4px;
+		}
+	</style>
+</head>
+<body>
+	<button class="theme-toggle" aria-label="Toggle theme"></button>
+	<div class="phone">
+		<div class="np-header">
+			<a href="home.html" class="icon-btn" aria-label="Close" style="background:var(--surface-alt)">⌄</a>
+			<span style="font-size:12.5px;color:var(--text-muted);font-weight:600">Playing from Thriller</span>
+			<button class="icon-btn" aria-label="More" style="background:var(--surface-alt)">⋯</button>
+		</div>
+
+		<div class="np-art-wrap">
+			<div class="np-art art-1"></div>
+		</div>
+		<div class="np-meta">
+			<div class="np-title">Thriller</div>
+			<div class="np-artist">Michael Jackson</div>
+		</div>
+
+		<div class="np-tabs">
+			<button class="np-tab active" data-tab="queue">☰ Queue</button>
+			<button class="np-tab" data-tab="lyrics">🎤 Lyrics</button>
+		</div>
+
+		<div class="np-panel">
+			<div class="np-list" data-panel="queue">
+				<div class="back-to">↩ Back to What's Up Danger</div>
+				<div class="np-section-label">Now Playing</div>
+				<div class="track-row active">
+					<div class="track-art art-1"></div>
+					<div class="track-meta">
+						<div class="track-title">Thriller</div>
+						<div class="track-artist">Michael Jackson</div>
+					</div>
+					<div class="track-duration">5:57</div>
+				</div>
+				<div class="np-section-label">Next in queue</div>
+				<div class="track-row">
+					<div class="track-art art-3"></div>
+					<div class="track-meta">
+						<div class="track-title">Billie Jean</div>
+						<div class="track-artist">Michael Jackson</div>
+					</div>
+					<div class="track-duration">4:54</div>
+				</div>
+				<div class="track-row">
+					<div class="track-art art-4"></div>
+					<div class="track-meta">
+						<div class="track-title">Beat It</div>
+						<div class="track-artist">Michael Jackson</div>
+					</div>
+					<div class="track-duration">4:18</div>
+				</div>
+				<div class="track-row">
+					<div class="track-art art-6"></div>
+					<div class="track-meta">
+						<div class="track-title">Wanna Be Startin' Somethin'</div>
+						<div class="track-artist">Michael Jackson</div>
+					</div>
+					<div class="track-duration">6:03</div>
+				</div>
+			</div>
+			<div class="np-list" data-panel="lyrics" style="display:none">
+				<p style="color:var(--text-muted);line-height:1.9;font-size:14.5px">
+					[ Placeholder lyrics panel — mockup only ]<br />
+					Line one of the synced lyric view goes here<br />
+					Line two, highlighted as playback reaches it<br />
+					Line three, still dimmed, waiting its turn<br />
+					— timing and highlight state come from the real Lyrics API
+				</p>
+			</div>
+		</div>
+
+		<div class="mini-player" style="padding-bottom:calc(10px + var(--safe-bottom))">
+			<div class="progress-track" style="position:absolute;top:0;left:0;right:0"><div class="progress-fill" style="width:38%"></div></div>
+			<div class="track-art art-1"></div>
+			<div class="track-meta">
+				<div class="track-title">Thriller</div>
+				<div class="track-artist">Michael Jackson</div>
+			</div>
+			<div class="mini-controls">
+				<button class="icon-btn primary" aria-label="Pause">⏸</button>
+				<button class="icon-btn" aria-label="Next">⏭</button>
+			</div>
+		</div>
+		<!-- No tab bar on this view, by design (the real app hides it while Now Playing is open) —
+		     the mini player above carries its own safe-area padding since it's the bottom-most bar. -->
+	</div>
+	<script src="common.js"></script>
+	<script>
+		document.querySelectorAll('.np-tab').forEach((tab) => {
+			tab.addEventListener('click', () => {
+				document.querySelectorAll('.np-tab').forEach((t) => t.classList.remove('active'));
+				tab.classList.add('active');
+				const target = tab.dataset.tab;
+				document.querySelectorAll('.np-list').forEach((panel) => {
+					panel.style.display = panel.dataset.panel === target ? '' : 'none';
+				});
+			});
+		});
+	</script>
+</body>
+</html>

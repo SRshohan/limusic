@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+	<title>SRMusic — Search (mockup)</title>
+	<link rel="icon" href="assets/icon.svg" />
+	<link rel="stylesheet" href="tokens.css" />
+</head>
+<body>
+	<button class="theme-toggle" aria-label="Toggle theme"></button>
+	<div class="phone">
+		<header class="header" style="padding-bottom:0">
+			<h1 style="font-size:22px;font-weight:800;margin:0">Search</h1>
+		</header>
+
+		<div style="padding:12px 16px 10px">
+			<div class="search-field" style="background:var(--surface);border:1px solid var(--primary);box-shadow:0 0 0 3px var(--primary-tint);padding:0 14px" id="search-field-wrap">
+				🔍
+				<input
+					id="search-input"
+					type="text"
+					placeholder="Search songs, artists, playlists"
+					style="flex:1;border:none;background:none;color:var(--text);font:inherit;outline:none;padding:10px 0"
+					oninput="onSearchInput(this.value)"
+				/>
+				<button id="clear-input" onclick="clearInput()" aria-label="Clear" style="display:none;color:var(--text-faint);font-size:15px;padding:4px">✕</button>
+			</div>
+		</div>
+
+		<div id="filter-rail" style="padding:0 16px 10px;display:none">
+			<div class="rail-wrap">
+				<div class="rail">
+					<button class="chip active">All</button>
+					<button class="chip">Songs</button>
+					<button class="chip">Videos</button>
+					<button class="chip">Albums</button>
+					<button class="chip">Artists</button>
+					<button class="chip">Playlists</button>
+				</div>
+				<div class="fade left"></div>
+				<div class="fade right"></div>
+			</div>
+		</div>
+
+		<div class="content" id="recent-state">
+			<section>
+				<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+					<h2 class="section-title" style="margin:0;display:flex;align-items:center;gap:6px">🕑 Recent</h2>
+					<button onclick="clearRecent()" style="font-size:12px;font-weight:600;color:var(--text-muted)">Clear recent</button>
+				</div>
+				<div id="recent-pills" style="display:flex;flex-wrap:wrap;gap:8px">
+					<div class="chip" style="display:inline-flex;align-items:center;gap:6px;padding-right:6px">
+						<span onclick="runSearch('thriller')" style="cursor:pointer;display:flex;align-items:center;gap:6px">🔍 thriller</span>
+						<button onclick="forgetRecent(this)" aria-label="Remove" style="width:20px;height:20px;border-radius:999px;display:flex;align-items:center;justify-content:center;color:var(--text-faint)">✕</button>
+					</div>
+					<div class="chip" style="display:inline-flex;align-items:center;gap:6px;padding-right:6px">
+						<span onclick="runSearch('billie jean')" style="cursor:pointer;display:flex;align-items:center;gap:6px">🔍 billie jean</span>
+						<button onclick="forgetRecent(this)" aria-label="Remove" style="width:20px;height:20px;border-radius:999px;display:flex;align-items:center;justify-content:center;color:var(--text-faint)">✕</button>
+					</div>
+					<div class="chip" style="display:inline-flex;align-items:center;gap:6px;padding-right:6px">
+						<span onclick="runSearch('lofi beats')" style="cursor:pointer;display:flex;align-items:center;gap:6px">🔍 lofi beats</span>
+						<button onclick="forgetRecent(this)" aria-label="Remove" style="width:20px;height:20px;border-radius:999px;display:flex;align-items:center;justify-content:center;color:var(--text-faint)">✕</button>
+					</div>
+				</div>
+			</section>
+		</div>
+
+		<div class="content" id="results-state" style="display:none">
+			<section>
+				<h2 class="section-title">Top result</h2>
+				<div class="card" style="display:flex;align-items:center;gap:12px;padding:12px">
+					<div class="track-art art-1" style="width:64px;height:64px;border-radius:14px"></div>
+					<div class="track-meta">
+						<div class="track-title" style="font-size:16px">Thriller</div>
+						<div class="track-artist">Michael Jackson · Song</div>
+					</div>
+					<button class="icon-btn primary" aria-label="Play" style="margin-left:auto">▶</button>
+				</div>
+			</section>
+
+			<section>
+				<h2 class="section-title">Songs</h2>
+				<div class="track-row active">
+					<div class="track-art art-1"></div>
+					<div class="track-meta">
+						<div class="track-title">Thriller</div>
+						<div class="track-artist">Michael Jackson</div>
+					</div>
+					<div class="track-duration">5:57</div>
+				</div>
+				<div class="track-row">
+					<div class="track-art art-3"></div>
+					<div class="track-meta">
+						<div class="track-title">Thriller (2003 Edit)</div>
+						<div class="track-artist">Michael Jackson</div>
+					</div>
+					<div class="track-duration">4:49</div>
+				</div>
+				<div class="track-row">
+					<div class="track-art art-5"></div>
+					<div class="track-meta">
+						<div class="track-title">Thriller (Live)</div>
+						<div class="track-artist">Michael Jackson</div>
+					</div>
+					<div class="track-duration">6:12</div>
+				</div>
+			</section>
+
+			<section>
+				<h2 class="section-title">Albums</h2>
+				<div class="card-grid">
+					<div class="card">
+						<div class="card-art art-1"></div>
+						<div class="card-body">
+							<div class="card-title">Thriller</div>
+							<div class="card-sub">Michael Jackson · 1982</div>
+						</div>
+					</div>
+					<div class="card">
+						<div class="card-art art-4"></div>
+						<div class="card-body">
+							<div class="card-title">Thriller 25</div>
+							<div class="card-sub">Michael Jackson · 2008</div>
+						</div>
+					</div>
+				</div>
+			</section>
+		</div>
+
+		<div class="mini-player" onclick="location.href='now-playing.html'" style="cursor:pointer">
+			<div class="progress-track" style="position:absolute;top:0;left:0;right:0"><div class="progress-fill" style="width:38%"></div></div>
+			<div class="track-art art-1"></div>
+			<div class="track-meta">
+				<div class="track-title">Thriller</div>
+				<div class="track-artist">Michael Jackson</div>
+			</div>
+			<div class="mini-controls">
+				<button class="icon-btn primary" aria-label="Pause" onclick="event.stopPropagation()">⏸</button>
+				<button class="icon-btn" aria-label="Next" onclick="event.stopPropagation()">⏭</button>
+			</div>
+		</div>
+
+		<nav class="tab-bar">
+			<a href="home.html"><span class="tab-icon">🏠</span>Home</a>
+			<a href="search.html" class="active"><span class="tab-icon">🔍</span>Search</a>
+			<a href="library.html"><span class="tab-icon">📚</span>Library</a>
+			<a href="#"><span class="tab-icon">👥</span>Listen Together</a>
+		</nav>
+	</div>
+	<script src="common.js"></script>
+	<script>
+		// Mirrors the real app: the chip row and results only exist once there's a query or results;
+		// an empty field shows "Recent" instead (personal.searches, written on every submitted
+		// search, read back here — see search.html's README note).
+		function showResults(show) {
+			document.getElementById('recent-state').style.display = show ? 'none' : '';
+			document.getElementById('results-state').style.display = show ? '' : 'none';
+			document.getElementById('filter-rail').style.display = show ? '' : 'none';
+		}
+		function onSearchInput(value) {
+			document.getElementById('clear-input').style.display = value ? '' : 'none';
+			showResults(!!value.trim());
+		}
+		function clearInput() {
+			const input = document.getElementById('search-input');
+			input.value = '';
+			input.focus();
+			onSearchInput('');
+		}
+		function runSearch(query) {
+			const input = document.getElementById('search-input');
+			input.value = query;
+			onSearchInput(query);
+			// A tapped recent chip is a resubmit, not a typeahead keystroke — it belongs at the top
+			// of the list again just like the real app's own `searchFor`, not left in its old spot.
+			const pills = document.getElementById('recent-pills');
+			const existing = [...pills.children].find((el) => el.textContent.trim().startsWith(query));
+			if (existing) pills.prepend(existing);
+		}
+		function forgetRecent(btn) {
+			btn.closest('.chip').remove();
+		}
+		function clearRecent() {
+			document.getElementById('recent-pills').innerHTML = '';
+		}
+	</script>
+</body>
+</html>

@@ -130,24 +130,24 @@
 		{#if !picks.length}
 			<!-- Empty: one wide drop target, not a heading plus a paragraph plus a row of ghost tiles.
 			     This sits at the top of home for anyone who never uses the feature, so it earns its
-			     space by being a single line and an obvious place to drop something. -->
+			     space by being a single line and an obvious place to drop something. The hint sentence
+			     is sm+ only — at phone width a title plus a wrapped two-line description read as the
+			     "paragraph" this was written to avoid. -->
 			<button
 				onclick={() => (picking = true)}
-				class="flex w-full cursor-pointer items-center gap-3 rounded-xl border border-dashed p-4 text-left transition-colors hover:border-foreground/30 hover:bg-accent/5 {before ===
+				class="flex w-full cursor-pointer items-center gap-3 rounded-xl border border-dashed p-3 text-left transition-colors hover:border-foreground/30 hover:bg-accent/5 {before ===
 				null
 					? 'border-primary bg-accent/5'
 					: ''}"
 			>
 				<span
-					class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-dashed text-muted-foreground"
+					class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-dashed text-muted-foreground"
 				>
-					<HugeiconsIcon icon={Add01Icon} class="h-5 w-5" />
+					<HugeiconsIcon icon={Add01Icon} class="h-4 w-4" />
 				</span>
-				<span class="min-w-0">
-					<span class="block text-sm font-medium">{t('home.add_shortcut')}</span>
-					<span class="block text-xs text-muted-foreground">
-						{t('home.shortcuts_desc')}
-					</span>
+				<span class="min-w-0 truncate">
+					<span class="text-sm font-medium">{t('home.add_shortcut')}</span>
+					<span class="hidden text-xs text-muted-foreground sm:inline"> — {t('home.shortcuts_desc')}</span>
 				</span>
 			</button>
 		{:else}

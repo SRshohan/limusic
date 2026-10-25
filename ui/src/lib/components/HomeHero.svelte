@@ -78,24 +78,42 @@
 		></div>
 	</div>
 
-	<div class="flex items-center justify-between gap-6 px-6 pb-4 pt-10">
-		<div class="flex min-w-0 items-center gap-4">
-			{#if auth.account?.signedIn && auth.account.thumbnail}
-				<!-- max-width:none defeats Tailwind Preflight's `img{max-width:100%}`, which in a tight box
-				     clamps width to the content-box while height stays fixed → a vertical oval. Inline so
-				     it's immune to Preflight and to stale dev CSS. -->
-				<img
-					src={thumb(auth.account.thumbnail, 128)}
-					alt=""
-					style="width:3rem;height:3rem;max-width:none"
-					class="shrink-0 rounded-full object-cover shadow-md"
-				/>
-			{/if}
-			<h1 class="truncate font-heading text-4xl font-bold tracking-tight drop-shadow-sm">
+	<!-- Below sm, the greeting and the search control stack instead of sharing one row: at phone
+	     width a fixed-width search field (max-w-xs) next to a shrink-0 history button left almost no
+	     room for the greeting, which `truncate` quietly squeezed to near-zero width rather than
+	     visibly breaking (#mobile-friendly audit). Stacking gives both their own full-width row. -->
+	<div
+		class="flex flex-col gap-3 px-4 pb-3 pt-6 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:px-6 sm:pb-4 sm:pt-10"
+	>
+		<div class="flex min-w-0 items-center gap-3 sm:gap-4">
+			<!-- Entry point to /profile (mint-ui-redesign, specs/account-profile) — previously this
+			     avatar was decorative (shown only when a thumbnail happened to exist, nothing to click).
+			     Now always present and always linked, with a letter-fallback when there's no thumbnail,
+			     so there's a consistent way to reach account switching/sign-out from Home. -->
+			<a href="/profile" aria-label={t('nav.account')} class="shrink-0">
+				{#if auth.account?.thumbnail}
+					<!-- max-width:none defeats Tailwind Preflight's `img{max-width:100%}`, which in a tight
+					     box clamps width to the content-box while height stays fixed → a vertical oval.
+					     Inline so it's immune to Preflight and to stale dev CSS. -->
+					<img
+						src={thumb(auth.account.thumbnail, 128)}
+						alt=""
+						style="width:3rem;height:3rem;max-width:none"
+						class="rounded-full object-cover shadow-md"
+					/>
+				{:else}
+					<div
+						class="flex h-12 w-12 items-center justify-center rounded-full bg-primary text-lg font-bold text-primary-foreground shadow-md"
+					>
+						{(auth.account?.name ?? '?').slice(0, 1).toUpperCase()}
+					</div>
+				{/if}
+			</a>
+			<h1 class="truncate font-heading text-2xl font-bold tracking-tight drop-shadow-sm sm:text-4xl">
 				{daypart}{auth.account?.name ? `, ${auth.account.name.split(' ')[0]}` : ''}
 			</h1>
 		</div>
-		<div class="flex shrink-0 items-center gap-2">
+		<div class="flex items-center gap-2 sm:shrink-0">
 			<!-- Listen Together moved out of here and lives on the titlebar alone: history is the thing
 			     you reach for from the home page. -->
 			<button
@@ -106,7 +124,10 @@
 			>
 				<HugeiconsIcon icon={HistoryIcon} class="h-5 w-5" />
 			</button>
-			<form class="relative w-full max-w-xs" onsubmit={(e) => { e.preventDefault(); goSearch(); }}>
+			<form
+				class="relative min-w-0 flex-1 sm:max-w-xs"
+				onsubmit={(e) => { e.preventDefault(); goSearch(); }}
+			>
 				<HugeiconsIcon
 					icon={Search01Icon}
 					class="pointer-events-none absolute left-3 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-muted-foreground"

@@ -509,3 +509,31 @@ export async function playPlaylist(
 export function currentVideoUrl(): string | null {
 	return resolvedVideoUrl;
 }
+
+// --- offline downloads (mint-ui-redesign, specs/offline-downloads) ---------------------------
+// Deliberately independent of `urlsFor`/`playCurrent` above: downloading a track the user has never
+// played has nothing to resolve from a queue, and `urlsFor`'s own `cacheInBackground` call is a
+// fire-and-forget best-effort cache, not something a user-initiated download should depend on
+// racing successfully. `ytCache`'s own `inFlight` set still coordinates safely if both happen to
+// run for the same video at once.
+
+/** Downloads `item` for offline playback if it isn't cached yet, then marks it a download (pinned,
+ *  surviving the play-cache's own eviction). Awaited: the caller shows this as a real operation
+ *  with a result, not a silent background fetch. */
+export async function downloadTrack(item: SongItem): Promise<void> {
+	const cached = await ytCache.getCached(item.video_id);
+	if (!cached) {
+		const resp = await resolvePlayback(item.video_id, item.is_upload);
+		await ytCache.ensureCached(item.video_id, `${SERVER_URL}${resp.stream_url}`);
+	}
+	await ytCache.pin(item.video_id, {
+		title: item.title,
+		artist: item.artists,
+		thumbnail: item.thumbnail
+	});
+}
+
+export const removeDownload = (videoId: string): Promise<void> => ytCache.unpin(videoId);
+export const isDownloaded = (videoId: string): Promise<boolean> => ytCache.isDownloaded(videoId);
+export const listDownloaded = () => ytCache.listDownloaded();
+export const downloadedBytes = () => ytCache.downloadedBytes();

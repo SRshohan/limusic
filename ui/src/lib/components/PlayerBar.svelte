@@ -140,6 +140,7 @@
 	onpointerdown={(e) => (pressedControl = isControl(e.target))}
 	onclick={onBarClick}
 	class="relative border-t bg-card"
+	style={np.open ? 'padding-bottom: env(safe-area-inset-bottom)' : undefined}
 >
 	<!-- Phone-width mini-player: the full desktop layout below has 9+ icons plus a seek bar packed
 	     into 3 flex columns, which only works once there's room for all of them (sm+) — below that

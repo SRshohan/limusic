@@ -1496,7 +1496,11 @@ export function initWebApp(): () => void {
 			loadLibrary();
 			loadSavedIndex();
 		})
-		.catch(() => {});
+		// A network failure here must still resolve `auth.account` out of its initial `null`: the
+		// web sign-in gate (mint-ui-redesign) treats `null` as "still checking" and blocks on it
+		// indefinitely otherwise — a failed check can't confirm a session, so it's treated the same
+		// as confirmed signed-out rather than hanging on a blank screen forever.
+		.catch(() => (auth.account ??= { signedIn: false }));
 	loadBlocked();
 	api.ltGetState().then(applyLtState).catch(() => {});
 	return teardown;

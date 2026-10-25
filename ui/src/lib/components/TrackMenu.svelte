@@ -24,10 +24,13 @@
 		Vynil02Icon,
 		DashboardSquare02Icon,
 		Share08Icon,
-		PreferenceVerticalIcon
+		PreferenceVerticalIcon,
+		Download01Icon,
+		Delete02Icon
 	} from '@hugeicons/core-free-icons';
 	import * as api from '$lib/api';
 	import type { SongItem } from '$lib/api';
+	import { isTauri } from '$lib/platform';
 	import { anchorMenu, ctxHost, fitMenu, NO_ANCHOR, toBody } from '$lib/menu';
 	import { removableFromPlaylist } from '$lib/queue';
 	import {
@@ -102,6 +105,12 @@
 	// Player-bar only: tempo/pitch belong to playback, not to a row you happen to be pointing at.
 	let advancedOpen = $state(false);
 	let anchor = $state(NO_ANCHOR);
+	// Offline downloads (mint-ui-redesign, specs/offline-downloads) are web-only and meaningless for
+	// a local file (already on disk, nothing to download) — fetched fresh on each open rather than
+	// kept live, since nothing else in this component needs to react to another row's download
+	// finishing.
+	let downloaded = $state(false);
+	let downloadBusy = $state(false);
 
 	// Click on the ⋯ opens under the button; right-click on the host row opens at the pointer.
 	function openMenu(e: MouseEvent) {
@@ -109,6 +118,26 @@
 		e.stopPropagation();
 		anchor = anchorMenu(e, { align: 'right' });
 		menuOpen = true;
+		if (!isTauri && !isLocal) api.isDownloaded(song.video_id).then((d) => (downloaded = d));
+	}
+
+	async function toggleDownload() {
+		if (downloadBusy) return;
+		downloadBusy = true;
+		try {
+			if (downloaded) {
+				await api.removeDownload(song.video_id);
+				downloaded = false;
+			} else {
+				await api.downloadTrack(song);
+				downloaded = true;
+				toast.success(t('player.downloaded', { title: song.title }));
+			}
+		} catch (e) {
+			toast.error(String(e));
+		} finally {
+			downloadBusy = false;
+		}
 	}
 	// stopPropagation everywhere: the trigger sits inside a clickable row (TrackRow's whole row is a
 	// play target), so its click must not reach the row's onplay (e.g. replacing the queue with the
@@ -348,6 +377,21 @@
 					)}
 			>
 				<HugeiconsIcon icon={Share08Icon} class="h-4 w-4" /> {t('player.share')}
+			</button>
+		{/if}
+		{#if !isTauri && !isLocal}
+			<button
+				class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent/10 disabled:pointer-events-none disabled:opacity-50"
+				disabled={downloadBusy}
+				onclick={(e) => run(e, toggleDownload)}
+			>
+				<HugeiconsIcon
+					icon={Download01Icon}
+					altIcon={Delete02Icon}
+					showAlt={downloaded}
+					class="h-4 w-4"
+				/>
+				{downloaded ? t('player.remove_download') : t('player.download')}
 			</button>
 		{/if}
 		{#if linksOnly}

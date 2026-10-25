@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+	<title>SRMusic — Local files (mockup)</title>
+	<link rel="icon" href="assets/icon.svg" />
+	<link rel="stylesheet" href="tokens.css" />
+	<style>
+		.stack-header {
+			display: flex;
+			align-items: center;
+			gap: 12px;
+			padding: 16px;
+		}
+		.stack-header h1 {
+			font-size: 18px;
+			margin: 0;
+			display: flex;
+			align-items: center;
+			gap: 8px;
+		}
+		.offline-badge {
+			font-size: 10.5px;
+			font-weight: 700;
+			padding: 2px 8px;
+			border-radius: var(--radius-pill);
+			background: var(--surface-alt);
+			color: var(--text-muted);
+			display: inline-flex;
+			align-items: center;
+			gap: 4px;
+		}
+		.import-card {
+			border: 1.5px dashed var(--border);
+			border-radius: var(--radius);
+			padding: 18px;
+			text-align: center;
+			color: var(--text-muted);
+			font-size: 13px;
+		}
+		.import-card button {
+			margin-top: 10px;
+			display: inline-flex;
+			align-items: center;
+			gap: 6px;
+			padding: 9px 18px;
+			border-radius: var(--radius-pill);
+			background: var(--primary);
+			color: var(--primary-contrast);
+			font-weight: 700;
+			font-size: 13.5px;
+		}
+		.action-row {
+			display: flex;
+			gap: 8px;
+			margin-bottom: 10px;
+		}
+		.action-row button {
+			display: flex;
+			align-items: center;
+			gap: 6px;
+			padding: 8px 16px;
+			border-radius: var(--radius-pill);
+			font-weight: 700;
+			font-size: 13px;
+		}
+		.action-row .play-all {
+			background: var(--primary);
+			color: var(--primary-contrast);
+		}
+		.action-row .shuffle {
+			background: var(--surface-alt);
+			color: var(--text);
+		}
+	</style>
+</head>
+<body>
+	<button class="theme-toggle" aria-label="Toggle theme"></button>
+	<div class="phone">
+		<div class="stack-header">
+			<a href="settings.html" class="icon-btn" aria-label="Back" style="background:var(--surface-alt)">←</a>
+			<h1>Offline music <span class="offline-badge">📴 No network needed</span></h1>
+		</div>
+
+		<div class="content">
+			<p style="margin:-10px 0 0;font-size:13px;color:var(--text-muted)">
+				Your own files, imported once and playable with no network at all.
+			</p>
+
+			<div class="import-card">
+				📁 Drop audio files here, or
+				<div><button>+ Import files</button></div>
+			</div>
+
+			<section>
+				<div class="rail-wrap">
+					<div class="rail">
+						<button class="chip active">All songs</button>
+						<button class="chip">Artists</button>
+						<button class="chip">Albums</button>
+					</div>
+					<div class="fade left"></div>
+					<div class="fade right"></div>
+				</div>
+			</section>
+
+			<section>
+				<div class="action-row">
+					<button class="play-all">▶ Play all</button>
+					<button class="shuffle">🔀 Shuffle</button>
+				</div>
+				<div class="track-row active">
+					<div class="track-art art-2"></div>
+					<div class="track-meta">
+						<div class="track-title">Clair de Lune</div>
+						<div class="track-artist">Debussy · imported.flac</div>
+					</div>
+					<div class="track-duration">4:32</div>
+				</div>
+				<div class="track-row">
+					<div class="track-art art-4"></div>
+					<div class="track-meta">
+						<div class="track-title">Gymnopédie No. 1</div>
+						<div class="track-artist">Erik Satie · gymno1.mp3</div>
+					</div>
+					<div class="track-duration">3:07</div>
+				</div>
+				<div class="track-row">
+					<div class="track-art art-5"></div>
+					<div class="track-meta">
+						<div class="track-title">River Flows in You</div>
+						<div class="track-artist">Yiruma · river.m4a</div>
+					</div>
+					<div class="track-duration">3:12</div>
+				</div>
+			</section>
+
+			<section>
+				<h2 class="section-title">Local playlists</h2>
+				<div class="card-grid">
+					<div class="card">
+						<div class="card-art art-3" style="display:flex;align-items:center;justify-content:center;font-size:28px">🎹</div>
+						<div class="card-body">
+							<div class="card-title">Piano Study</div>
+							<div class="card-sub">Local · 12 songs</div>
+						</div>
+					</div>
+					<div class="card">
+						<div class="card-art art-6" style="display:flex;align-items:center;justify-content:center;font-size:28px">🚗</div>
+						<div class="card-body">
+							<div class="card-title">Car Rip (2019)</div>
+							<div class="card-sub">Local · 34 songs</div>
+						</div>
+					</div>
+				</div>
+			</section>
+		</div>
+
+		<!-- Deliberately its own transport bar, not the main app's PlayerBar — the real app keeps
+		     these fully separate (offline playback never touches the Tauri/server backend), but
+		     styled identically here so the redesign still feels like one app. -->
+		<div class="mini-player" style="padding-bottom:calc(10px + var(--safe-bottom))">
+			<div class="progress-track" style="position:absolute;top:0;left:0;right:0"><div class="progress-fill" style="width:61%"></div></div>
+			<div class="track-art art-2"></div>
+			<div class="track-meta">
+				<div class="track-title">Clair de Lune</div>
+				<div class="track-artist">Debussy · offline</div>
+			</div>
+			<div class="mini-controls">
+				<button class="icon-btn primary" aria-label="Pause">⏸</button>
+				<button class="icon-btn" aria-label="Next">⏭</button>
+			</div>
+		</div>
+	</div>
+	<script src="common.js"></script>
+</body>
+</html>

@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+	<title>SRMusic — Library (mockup)</title>
+	<link rel="icon" href="assets/icon.svg" />
+	<link rel="stylesheet" href="tokens.css" />
+</head>
+<body>
+	<button class="theme-toggle" aria-label="Toggle theme"></button>
+	<div class="phone">
+		<header class="header">
+			<h1 style="font-size:22px;font-weight:800;margin:0">Library</h1>
+			<button class="chip" style="background:var(--surface-alt);display:flex;align-items:center;gap:6px;color:var(--text)">+ New Playlist</button>
+		</header>
+
+		<div style="padding:0 16px 10px">
+			<div class="rail-wrap">
+				<div class="rail">
+					<button class="chip active">All</button>
+					<button class="chip">Playlists</button>
+					<button class="chip">Albums</button>
+					<button class="chip">Artists</button>
+					<button class="chip">Songs</button>
+					<button class="chip">Uploads</button>
+					<button class="chip">Local</button>
+				</div>
+				<div class="fade left"></div>
+				<div class="fade right"></div>
+			</div>
+		</div>
+
+		<div class="content">
+			<section>
+				<h2 class="section-title">Playlists</h2>
+				<div class="card-grid">
+					<div class="card">
+						<div class="card-art art-3" style="display:flex;align-items:center;justify-content:center;font-size:28px">🔁</div>
+						<div class="card-body">
+							<div class="card-title">On Repeat</div>
+							<div class="card-sub">20 songs</div>
+						</div>
+					</div>
+					<div class="card">
+						<div class="card-art art-5"></div>
+						<div class="card-body">
+							<div class="card-title">Liked Music</div>
+							<div class="card-sub">312 songs</div>
+						</div>
+					</div>
+					<div class="card">
+						<div class="card-art art-4"></div>
+						<div class="card-body">
+							<div class="card-title">Road Trip 2026</div>
+							<div class="card-sub">54 songs</div>
+						</div>
+					</div>
+					<div class="card">
+						<div class="card-art art-2"></div>
+						<div class="card-body">
+							<div class="card-title">Study Beats</div>
+							<div class="card-sub">Local · 18 songs</div>
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<section>
+				<h2 class="section-title">Albums</h2>
+				<div class="card-grid">
+					<div class="card">
+						<div class="card-art art-1"></div>
+						<div class="card-body">
+							<div class="card-title">Thriller</div>
+							<div class="card-sub">Michael Jackson</div>
+						</div>
+					</div>
+					<div class="card">
+						<div class="card-art art-6"></div>
+						<div class="card-body">
+							<div class="card-title">What's Up Danger</div>
+							<div class="card-sub">Blackway &amp; Black Caviar</div>
+						</div>
+					</div>
+				</div>
+			</section>
+		</div>
+
+		<div class="mini-player" onclick="location.href='now-playing.html'" style="cursor:pointer">
+			<div class="progress-track" style="position:absolute;top:0;left:0;right:0"><div class="progress-fill" style="width:38%"></div></div>
+			<div class="track-art art-1"></div>
+			<div class="track-meta">
+				<div class="track-title">Thriller</div>
+				<div class="track-artist">Michael Jackson</div>
+			</div>
+			<div class="mini-controls">
+				<button class="icon-btn primary" aria-label="Pause" onclick="event.stopPropagation()">⏸</button>
+				<button class="icon-btn" aria-label="Next" onclick="event.stopPropagation()">⏭</button>
+			</div>
+		</div>
+
+		<nav class="tab-bar">
+			<a href="home.html"><span class="tab-icon">🏠</span>Home</a>
+			<a href="search.html"><span class="tab-icon">🔍</span>Search</a>
+			<a href="library.html" class="active"><span class="tab-icon">📚</span>Library</a>
+			<a href="#"><span class="tab-icon">👥</span>Listen Together</a>
+		</nav>
+	</div>
+	<script src="common.js"></script>
+</body>
+</html>

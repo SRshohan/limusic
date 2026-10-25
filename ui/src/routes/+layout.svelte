@@ -1,7 +1,7 @@
 <script lang="ts">
 	import './layout.css';
 	import favicon from '$lib/assets/favicon.svg';
-	import { ModeWatcher, mode } from 'mode-watcher';
+	import { ModeWatcher, mode, setMode } from 'mode-watcher';
 	import { HugeiconsIcon } from '@hugeicons/svelte';
 	import {
 		CheckmarkCircle02Icon,
@@ -25,6 +25,7 @@
 	import { loadAppIcon } from '$lib/appicon.svelte';
 	import { isTauri } from '$lib/platform';
 	import PwaUpdatePrompt from '$lib/components/PwaUpdatePrompt.svelte';
+	import SignInGate from '$lib/components/SignInGate.svelte';
 	import { thumb } from '$lib/thumb';
 	import { t } from '$lib/i18n.svelte';
 	import { blockForeignDrag, dragScroll } from '$lib/dnd';
@@ -189,6 +190,19 @@
 	// meaningful (and only safe to call) inside the Tauri webview.
 	if (isTauri) loadAppIcon();
 
+	// mode-watcher's `defaultMode` prop relies on a FOUC-prevention script that only runs when
+	// Svelte renders <svelte:head> as part of the server-rendered HTML; this app is ssr=false (a
+	// static SPA shell), so that script is inserted into a live DOM via `{@html}` and never
+	// executes, and mode-watcher's own module-level store eagerly persists "system" to
+	// localStorage before this ever runs anyway. Force dark explicitly, once, on a visitor's very
+	// first load — later visits, and an explicit choice in Settings, are left alone.
+	onMount(() => {
+		if (browser && !localStorage.getItem('srmusic:theme-seen')) {
+			setMode('dark');
+			localStorage.setItem('srmusic:theme-seen', '1');
+		}
+	});
+
 	// Wire the Tauri event bridge once for the whole app; teardown on destroy. Check for an update
 	// on every app open (silent unless one exists).
 	onMount(() => {
@@ -236,12 +250,25 @@
 />
 
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>
-<ModeWatcher />
+<ModeWatcher defaultMode="dark" />
 
 <!-- The mini player is the whole window when it is the window: no titlebar, no sidebar, no routes,
      and no toasts (a banner would cover most of a 560x180 widget). -->
 {#if isMini}
 	<MiniPlayer />
+{:else if !isTauri && auth.account === null}
+	<!-- Still waiting on initWebApp's first `getAccount()` to resolve (mint-ui-redesign,
+	     specs/web-signin-gate) — render nothing rather than flashing the sign-in gate or the app
+	     shell before the real answer is known. Normally resolves within one request; no spinner to
+	     avoid a flash-of-loading-state for the common fast case. -->
+{:else if !isTauri && auth.account?.signedIn === false}
+	<!-- No app content renders without a valid session (mint-ui-redesign, specs/web-signin-gate) —
+	     this is the whole shell, not a screen pushed on top of it: no Sidebar/BottomNav/PlayerBar
+	     underneath, nothing to navigate to until a cookie is accepted. The gate's own submit calls
+	     the same `signInWithCookie` AccountMenu.svelte's "Add another account" flow uses; success
+	     flips `auth.account.signedIn` via the existing `auth-changed` listener (initWebApp), which
+	     re-evaluates this condition on its own — no manual transition needed here. -->
+	<SignInGate />
 {:else if !isTauri}
 	<!-- Plain browser tab (the PWA path, never reached inside Tauri). The desktop-only window
 	     chrome (Titlebar/ResizeBorders, native-video-hole compositing, theater mode's Win32 half)

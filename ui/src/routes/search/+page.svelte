@@ -35,6 +35,7 @@
 	import TrackRowSkeleton from '$lib/components/TrackRowSkeleton.svelte';
 	import TrackSelectionBar from '$lib/components/TrackSelectionBar.svelte';
 	import TrackSelectButton from '$lib/components/TrackSelectButton.svelte';
+	import ChipRail, { chipClass } from '$lib/components/ChipRail.svelte';
 	import { trackSelection, type TrackSelection } from '$lib/selection.svelte';
 	import * as api from '$lib/api';
 	import type { BrowseItem, Mood, MoodSection, SearchResults, SongItem } from '$lib/api';
@@ -322,13 +323,6 @@
 		artists: t('common.artists'),
 		playlists: t('common.playlists')
 	});
-	const chipClass = (active: boolean) =>
-		`shrink-0 cursor-pointer rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${
-			active
-				? 'bg-primary text-primary-foreground'
-				: 'bg-foreground/5 text-foreground/75 hover:bg-foreground/10 hover:text-foreground'
-		}`;
-
 	// The field sits on the header's wash until it pins to the top, and only then needs a
 	// background of its own (home's chip bar does the same).
 	let stuck = $state(false);
@@ -391,11 +385,13 @@
 		<div class="absolute inset-0 bg-gradient-to-b from-transparent to-background"></div>
 	</div>
 
-	<h1 class="px-6 pt-10 font-heading text-4xl font-bold tracking-tight">{t('common.search')}</h1>
+	<h1 class="px-4 pt-6 font-heading text-2xl font-bold tracking-tight sm:px-6 sm:pt-10 sm:text-4xl">
+		{t('common.search')}
+	</h1>
 
 	<div class="h-px" {@attach stickWatch}></div>
 	<div
-		class="sticky top-0 z-20 px-6 pb-3 pt-4 transition-colors duration-200 {stuck
+		class="sticky top-0 z-20 px-4 pb-3 pt-4 transition-colors duration-200 sm:px-6 {stuck
 			? 'bg-background'
 			: ''}"
 	>
@@ -433,20 +429,22 @@
 		</form>
 		{#if res || searching}
 			<div class="mt-3 flex items-center gap-2">
-				<div class="rail flex min-w-0 flex-1 gap-2 overflow-x-auto" role="group" aria-label={t('search.filters')}>
-					{#each CATS as c (c)}
-						<!-- Hidden with music videos off: there is no such thing as a video search then. -->
-						{#if c !== 'videos' || videos.length}
-							<button
-								class={chipClass(cat === c)}
-								aria-pressed={cat === c}
-								onclick={() => pickCat(c)}
-							>
-								{LABEL[c]}
-							</button>
-						{/if}
-					{/each}
-				</div>
+				<ChipRail class="min-w-0 flex-1" aria-label={t('search.filters')} role="group">
+					{#snippet children()}
+						{#each CATS as c (c)}
+							<!-- Hidden with music videos off: there is no such thing as a video search then. -->
+							{#if c !== 'videos' || videos.length}
+								<button
+									class={chipClass(cat === c)}
+									aria-pressed={cat === c}
+									onclick={() => pickCat(c)}
+								>
+									{LABEL[c]}
+								</button>
+							{/if}
+						{/each}
+					{/snippet}
+				</ChipRail>
 				{#if cat === 'songs'}
 					<TrackSelectButton {selection} />
 				{:else if cat === 'videos'}
@@ -461,7 +459,7 @@
 		{/if}
 	</div>
 
-	<div class="px-6 pb-10 pt-4">
+	<div class="px-4 pb-10 pt-4 sm:px-6">
 		{#if error}
 			<ErrorState message={error} onRetry={runSearch} />
 		{:else if searching}

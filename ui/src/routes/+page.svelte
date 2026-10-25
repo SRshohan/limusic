@@ -4,6 +4,7 @@
 	import { goto } from '$app/navigation';
 	import { HugeiconsIcon } from '@hugeicons/svelte';
 	import {
+		ArrowTurnBackwardIcon,
 		ArrowUpBigIcon,
 		DashboardSquareEditIcon,
 		MusicNote01Icon,
@@ -15,12 +16,12 @@
 	import ErrorState from '$lib/components/ErrorState.svelte';
 	import HomeHero from '$lib/components/HomeHero.svelte';
 	import Shortcuts from '$lib/components/Shortcuts.svelte';
-	import RecentRail from '$lib/components/RecentRail.svelte';
 	import Shelf from '$lib/components/Shelf.svelte';
 	import ForgottenFavourites from '$lib/components/ForgottenFavourites.svelte';
 	import FamiliarArtists from '$lib/components/FamiliarArtists.svelte';
 	import HomeLayoutDialog from '$lib/components/HomeLayoutDialog.svelte';
 	import TrackRowSkeleton from '$lib/components/TrackRowSkeleton.svelte';
+	import ChipRail, { chipClass } from '$lib/components/ChipRail.svelte';
 	import * as api from '$lib/api';
 	import type { BrowseItem, HomeChip, HomePage, HomeSection } from '$lib/api';
 	import {
@@ -67,16 +68,6 @@
 			.slice(0, 9)
 			.map((r) => freshen(r, library.items))
 	);
-
-	// A faint tint at rest, the accent when on, so the one active filter is the only saturated thing
-	// above the feed. Tinted rather than outlined: a row of outlines was another dozen lines on a page
-	// that had too many (#319), and a tint of the foreground reads on the artwork and on a plain page.
-	const chipClass = (active: boolean) =>
-		`shrink-0 cursor-pointer rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${
-			active
-				? 'bg-primary text-primary-foreground'
-				: 'bg-foreground/5 text-foreground/75 hover:bg-foreground/10 hover:text-foreground'
-		}`;
 
 	// The chips stay while a filter is on even when Edit home switched them off: "All" is the way out.
 	const showChips = $derived(chips.length > 0 && (personal.home.chips || !!selected));
@@ -378,10 +369,37 @@
 			? 'bg-background'
 			: ''}"
 	>
-		<!-- Leads the row, ahead of the chips, and never scrolls away with them: the only way into
-		     arranging home. An icon beside the chips (the tooltip names it); labelled once the chips
-		     are switched off, when it is alone in the row and a bare glyph would say nothing.
-		     Sized by the same padding and line height as a chip, plus its outline. Top-aligned with the
+		<div class="min-w-0 flex-1">
+			{#if showChips}
+				<ChipRail>
+					{#snippet children()}
+						<!-- An explicit "All" leads the row, matching the mockup's chip order — it's also the
+						     way out of a filter. Clicking the active chip again also clears it, but nobody
+						     discovers that, and nothing else on screen says you're filtered. -->
+						<button onclick={() => load(null)} class={chipClass(!selected)}>{t('common.all')}</button>
+						{#each chips as chip (chip.params)}
+							<button
+								onclick={() => load(selected === chip.params ? null : chip.params)}
+								class={chipClass(selected === chip.params)}
+							>
+								{chip.title}
+							</button>
+						{/each}
+					{/snippet}
+				</ChipRail>
+			{:else if loading && personal.home.chips}
+				<!-- Hold the chips' place on a cold load: they arrive with the feed. -->
+				<div class="flex gap-2 overflow-hidden" aria-hidden="true">
+					{#each ['w-10', 'w-16', 'w-20', 'w-14', 'w-24', 'w-16'] as w, i (i)}
+						<Skeleton class="h-8 shrink-0 rounded-full {w}" />
+					{/each}
+				</div>
+			{/if}
+		</div>
+		<!-- Trails the chips rather than leading them, so "All" reads first like the mockup; this
+		     button sits outside the chip rail's own scroll area, so it's always reachable without
+		     scrolling. The only way into arranging home — labelled once the chips are switched off,
+		     when it is alone in the row and a bare glyph would say nothing. Top-aligned with the
 		     chips, not centred on the row: an overflowing chip row reserves 4px under itself for the
 		     scrollbar, which put the button below them. -mt-px splits the outline's 2px. -->
 		<button
@@ -395,30 +413,6 @@
 			<HugeiconsIcon icon={DashboardSquareEditIcon} class="h-5 w-5" />
 			{#if !chipRow}{t('home.edit_home')}{/if}
 		</button>
-		<div class="min-w-0 flex-1">
-			{#if showChips}
-				<div class="rail flex gap-2 overflow-x-auto">
-					<!-- An explicit "All" is the way out of a filter. Clicking the active chip again also
-					     clears it, but nobody discovers that, and nothing else on screen says you're filtered. -->
-					<button onclick={() => load(null)} class={chipClass(!selected)}>{t('common.all')}</button>
-					{#each chips as chip (chip.params)}
-						<button
-							onclick={() => load(selected === chip.params ? null : chip.params)}
-							class={chipClass(selected === chip.params)}
-						>
-							{chip.title}
-						</button>
-					{/each}
-				</div>
-			{:else if loading && personal.home.chips}
-				<!-- Hold the chips' place on a cold load: they arrive with the feed. -->
-				<div class="flex gap-2 overflow-hidden" aria-hidden="true">
-					{#each ['w-10', 'w-16', 'w-20', 'w-14', 'w-24', 'w-16'] as w, i (i)}
-						<Skeleton class="h-8 shrink-0 rounded-full {w}" />
-					{/each}
-				</div>
-			{/if}
-		</div>
 		{#if stuck}
 			<div
 				class="pointer-events-none absolute inset-x-0 top-full h-5 bg-gradient-to-b from-background to-transparent"
@@ -448,7 +442,6 @@
 					<Shelf
 						title={block.shelf.title}
 						items={block.shelf.items}
-						queueAll={false}
 						size={personal.home.cards}
 						community={/community/i.test(block.shelf.title)}
 						onMore={block.shelf.moreBrowseId ? () => showMore(block.shelf!) : undefined}
@@ -456,7 +449,15 @@
 				{:else if block.key === SHORTCUTS}
 					<Shortcuts />
 				{:else if block.key === RECENT}
-					{#if recent.length}<RecentRail items={recent} />{/if}
+					{#if recent.length}
+						<Shelf
+							title={t('home.jump_back_in')}
+							items={recent}
+							rich={false}
+							size={personal.home.cards}
+							icon={ArrowTurnBackwardIcon}
+						/>
+					{/if}
 				{:else if block.key === FAMILIAR}
 					<FamiliarArtists />
 				{:else if forgotten}

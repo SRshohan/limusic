@@ -27,6 +27,7 @@
 	import MediaCard from '$lib/components/MediaCard.svelte';
 	import MediaCardSkeleton from '$lib/components/MediaCardSkeleton.svelte';
 	import ErrorState from '$lib/components/ErrorState.svelte';
+	import ChipRail from '$lib/components/ChipRail.svelte';
 	import type { BrowseItem } from '$lib/api';
 	import {
 		auth,
@@ -124,8 +125,8 @@
 	{/if}
 {/snippet}
 
-<div class="p-6">
-	<div class="mb-6 flex items-center justify-between">
+<div class="p-4 sm:p-6">
+	<div class="mb-4 flex flex-wrap items-center justify-between gap-2 sm:mb-6">
 		<h1 class="font-heading text-2xl font-bold">{t('library.title')}</h1>
 		<div class="flex items-center gap-2">
 			<!-- Only with something to push: saves made before signing in, which live on this
@@ -181,29 +182,40 @@
 
 	<!-- The tabs always render: Local music needs neither an account nor a connection. -->
 	<Tabs.Root bind:value={tab}>
-		<Tabs.List class="mb-4">
-			<Tabs.Trigger value="all">
-				<HugeiconsIcon icon={SquareStackIcon} class="h-4 w-4" /> {t('common.all')}
-			</Tabs.Trigger>
-			<Tabs.Trigger value="playlists">
-				<HugeiconsIcon icon={Playlist02Icon} class="h-4 w-4" /> {t('library.playlists_tab')}
-			</Tabs.Trigger>
-			<Tabs.Trigger value="albums">
-				<HugeiconsIcon icon={MusicNoteSquare02Icon} class="h-4 w-4" /> {t('library.albums_tab')}
-			</Tabs.Trigger>
-			<Tabs.Trigger value="artists">
-				<HugeiconsIcon icon={UserSharingIcon} class="h-4 w-4" /> {t('library.artists_tab')}
-			</Tabs.Trigger>
-			<Tabs.Trigger value="songs">
-				<HugeiconsIcon icon={MusicNote01Icon} class="h-4 w-4" /> {t('library.songs_tab')}
-			</Tabs.Trigger>
-			<Tabs.Trigger value="uploads">
-				<HugeiconsIcon icon={CloudUploadIcon} class="h-4 w-4" /> {t('library.uploads_tab')}
-			</Tabs.Trigger>
-			<Tabs.Trigger value="local">
-				<HugeiconsIcon icon={DriveIcon} class="h-4 w-4" /> {t('library.local_tab')}
-			</Tabs.Trigger>
-		</Tabs.List>
+		<!-- `Tabs.List` is `w-fit`, no wrap: at phone width all seven full-label tabs together are
+		     wider than the viewport, which (with no scroll container of its own) overflowed the whole
+		     page horizontally (#mobile-layout — this page had no responsive treatment at all before).
+		     `ChipRail` is the same scrollable-row wrapper (with the same edge-fade affordance) the
+		     mood/filter chip rows use — it only needs something to scroll, not specifically chips. -->
+		<div class="mb-4">
+			<ChipRail>
+				{#snippet children()}
+					<Tabs.List>
+						<Tabs.Trigger value="all">
+							<HugeiconsIcon icon={SquareStackIcon} class="h-4 w-4" /> {t('common.all')}
+						</Tabs.Trigger>
+						<Tabs.Trigger value="playlists">
+							<HugeiconsIcon icon={Playlist02Icon} class="h-4 w-4" /> {t('library.playlists_tab')}
+						</Tabs.Trigger>
+						<Tabs.Trigger value="albums">
+							<HugeiconsIcon icon={MusicNoteSquare02Icon} class="h-4 w-4" /> {t('library.albums_tab')}
+						</Tabs.Trigger>
+						<Tabs.Trigger value="artists">
+							<HugeiconsIcon icon={UserSharingIcon} class="h-4 w-4" /> {t('library.artists_tab')}
+						</Tabs.Trigger>
+						<Tabs.Trigger value="songs">
+							<HugeiconsIcon icon={MusicNote01Icon} class="h-4 w-4" /> {t('library.songs_tab')}
+						</Tabs.Trigger>
+						<Tabs.Trigger value="uploads">
+							<HugeiconsIcon icon={CloudUploadIcon} class="h-4 w-4" /> {t('library.uploads_tab')}
+						</Tabs.Trigger>
+						<Tabs.Trigger value="local">
+							<HugeiconsIcon icon={DriveIcon} class="h-4 w-4" /> {t('library.local_tab')}
+						</Tabs.Trigger>
+					</Tabs.List>
+				{/snippet}
+			</ChipRail>
+		</div>
 		<!-- Every branch below is gated on `tab`, because bits-ui never unmounts an inactive panel: it
 		     renders every one and hides the inactive ones. Left alone, opening Library builds each card twice
 		     (once for All, once for its own tab) and mounts the whole Local tab, disk scan included,

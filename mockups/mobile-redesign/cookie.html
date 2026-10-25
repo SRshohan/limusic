@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+	<title>SRMusic — Sign in with cookie (mockup)</title>
+	<link rel="icon" href="assets/icon.svg" />
+	<link rel="stylesheet" href="tokens.css" />
+	<style>
+		.stack-header {
+			display: flex;
+			align-items: center;
+			gap: 12px;
+			padding: 16px;
+		}
+		.stack-header h1 {
+			font-size: 18px;
+			margin: 0;
+		}
+		.brand-moment {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			gap: 10px;
+			padding: 8px 24px 20px;
+			text-align: center;
+		}
+		.brand-moment p {
+			font-size: 13.5px;
+			color: var(--text-muted);
+			margin: 0;
+			line-height: 1.5;
+		}
+		.steps {
+			background: var(--surface-alt);
+			border-radius: var(--radius);
+			padding: 14px 16px;
+			margin-bottom: 16px;
+		}
+		.steps ol {
+			margin: 8px 0 0;
+			padding-left: 18px;
+			display: flex;
+			flex-direction: column;
+			gap: 8px;
+		}
+		.steps li {
+			font-size: 13px;
+			color: var(--text-muted);
+			line-height: 1.45;
+		}
+		.steps summary {
+			font-weight: 700;
+			font-size: 13.5px;
+			cursor: pointer;
+			color: var(--primary-strong);
+		}
+		:root[data-theme='dark'] .steps summary {
+			color: var(--primary);
+		}
+		label.field-label {
+			display: block;
+			font-size: 13.5px;
+			font-weight: 700;
+			margin-bottom: 8px;
+		}
+		textarea {
+			width: 100%;
+			min-height: 110px;
+			border-radius: 14px;
+			border: 1px solid var(--border);
+			background: var(--surface);
+			color: var(--text);
+			font-size: 13px;
+			font-family: ui-monospace, 'SF Mono', monospace;
+			padding: 12px;
+			resize: vertical;
+		}
+		textarea:focus {
+			outline: none;
+			border-color: var(--primary);
+			box-shadow: 0 0 0 3px var(--primary-tint);
+		}
+		.submit-btn {
+			width: 100%;
+			padding: 14px;
+			border-radius: var(--radius-pill);
+			background: var(--primary);
+			color: var(--primary-contrast);
+			font-weight: 700;
+			font-size: 15px;
+			margin-top: 14px;
+		}
+		.submit-btn:disabled {
+			opacity: 0.5;
+		}
+		.security-note {
+			display: flex;
+			gap: 8px;
+			align-items: flex-start;
+			padding: 12px 14px;
+			border-radius: var(--radius);
+			background: var(--danger-tint);
+			color: var(--danger);
+			font-size: 12.5px;
+			line-height: 1.5;
+			margin-top: 16px;
+		}
+	</style>
+</head>
+<body>
+	<button class="theme-toggle" aria-label="Toggle theme"></button>
+	<div class="phone">
+		<div class="stack-header">
+			<a href="profile.html" class="icon-btn" aria-label="Back" style="background:var(--surface-alt)">←</a>
+			<h1>Add account</h1>
+		</div>
+
+		<div class="brand-moment">
+			<img src="assets/icon.svg" alt="" width="56" height="56" style="border-radius:22%" />
+			<p>
+				SRMusic's web app signs in by pasting your YouTube Music session cookie — there's no
+				in-app Google sign-in window on the web, the way there is on desktop.
+			</p>
+		</div>
+
+		<div class="content" style="padding-top:0">
+			<details class="steps" open>
+				<summary>How do I get this?</summary>
+				<ol>
+					<li>While signed in to music.youtube.com, open DevTools (F12 or Cmd+Opt+I) → the Network tab.</li>
+					<li>In a new tab, open <code style="font-size:12px;background:var(--surface);padding:1px 5px;border-radius:5px;word-break:break-all">music.youtube.com/youtubei/v1/account/account_menu?prettyPrint=false</code> — this is the exact request SRMusic itself uses to check a cookie actually works, so it's always there and easy to find (filter the list by "account_menu" if needed).</li>
+					<li>Click that request, then open Headers → Request Headers (not Response Headers), and find the line starting "Cookie:".</li>
+					<li>Copy everything after "Cookie: " and paste it below.</li>
+				</ol>
+			</details>
+
+			<label class="field-label" for="cookie-input">Paste your YouTube Music cookie</label>
+			<textarea id="cookie-input" placeholder="Cookie: VISITOR_INFO1_LIVE=...; SAPISID=...; ..." oninput="document.querySelector('.submit-btn').disabled = !this.value.trim()"></textarea>
+
+			<button class="submit-btn" disabled>Sign in</button>
+
+			<div class="security-note">
+				🔒 This is a live login credential — treat it like a password. It's sent straight to
+				your own SRMusic server and stored behind an opaque session cookie there; it's never
+				shown again or logged.
+			</div>
+		</div>
+	</div>
+	<script src="common.js"></script>
+</body>
+</html>

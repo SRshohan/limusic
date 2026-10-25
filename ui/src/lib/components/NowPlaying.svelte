@@ -231,10 +231,9 @@
 	     80rem cap exists to stop a square drifting into an empty half, which a video this wide
 	     never does. -->
 	<div
-		class="relative flex w-full gap-6 xl:gap-10 {tabbed
+		class="now-art-frame relative flex w-full gap-6 xl:gap-10 {tabbed
 			? 'flex-col md:flex-row'
 			: 'flex-row'} {showVideo() ? 'max-w-[100rem]' : 'max-w-[80rem]'}"
-		style="--art:calc(min(100%,100vh - 11rem) * 0.75); --vid:calc((100vh - 11rem) * 0.85 * 16 / 9)"
 	>
 		{#if !big}
 			<!-- Stacked above the tabs below md (there isn't room for both side by side there — see
@@ -368,8 +367,14 @@
 		{/if}
 
 		{#if tabbed}
+			<!-- flex-1 always applies now, not just when `big`: below md the artwork stacks above this
+			     column (not beside it), so without flex-1 here a short queue/lyrics left this column
+			     sized to its own content, stretching only itself and leaving the leftover vertical
+			     space in the flex-col above as a dead gap before the player bar (#mobile-layout).
+			     md:flex-none cancels that growth once the layout goes side-by-side, where width (not
+			     height) is what this column should claim — governed by the explicit w-[*] below. -->
 			<div
-				class="flex min-h-0 flex-col {big ? 'flex-1' : 'w-full md:w-[22rem] xl:w-[26rem]'}"
+				class="flex min-h-0 flex-1 flex-col {big ? '' : 'w-full md:w-[22rem] xl:w-[26rem] md:flex-none'}"
 				data-np-keep
 			>
 				<Tabs.Root
@@ -419,3 +424,27 @@
 		{/if}
 	</div>
 </div>
+
+<style>
+	/* --art is the artwork's side: whichever is smaller of the column's width and the height left
+	   over once the titlebar, the player bar and this padding have had theirs, at 75% so the square
+	   doesn't dominate the view. 11rem is those three measured, not computed (see the comment above
+	   this div's markup). A video's budget and cap follow the same idea (see there too). */
+	.now-art-frame {
+		--art: calc(min(100%, 100vh - 11rem) * 0.75);
+		--vid: calc((100vh - 11rem) * 0.85 * 16 / 9);
+	}
+
+	/* Below md the artwork stacks *above* the Queue/Lyrics tabs and list instead of sitting beside
+	   them (`tabbed ? 'flex-col md:flex-row' : ...` above), so this same viewport height also has to
+	   fit the tab row and at least the first queue row underneath the artwork — budget the extra
+	   ~6rem for that and shrink the multiplier, so phone-height screens don't push the tabs below
+	   the fold on first render (#mobile-layout; was just 11rem/0.75 for every width, sized for the
+	   side-by-side desktop layout alone). */
+	@media (max-width: 767px) {
+		.now-art-frame {
+			--art: calc(min(100%, 100vh - 17rem) * 0.68);
+			--vid: calc((100vh - 17rem) * 0.78 * 16 / 9);
+		}
+	}
+</style>

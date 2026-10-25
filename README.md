@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="./assets/docs/limusic-github-image.png" alt="Limusic Banner" width="100%">
+<img src="./assets/docs/limusic-github-image.png" alt="SRMusic Banner" width="100%">
 
-# Limusic
+# SRMusic
 
 **A native desktop YouTube Music client. Rust + Tauri, ad-free, no Electron.**
 
@@ -21,7 +21,7 @@
   <img alt="Rust" src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white">
 </p>
 
-**Limusic** talks directly to YouTube's internal API and plays audio through libmpv: no bundled
+**SRMusic** talks directly to YouTube's internal API and plays audio through libmpv: no bundled
 browser runtime, no backend server, no ads in the audio. It started as a desktop rebuild of the
 playback engine behind [Metrolist](https://github.com/mostafaalagamy/Metrolist), an Android
 YouTube Music client, and grew from there.
@@ -59,7 +59,7 @@ YouTube Music client, and grew from there.
 
 <table>
   <tr>
-    <td><img src="website/src/assets/screen-playlist.webp" alt="A playlist in Limusic"></td>
+    <td><img src="website/src/assets/screen-playlist.webp" alt="A playlist in SRMusic"></td>
     <td><img src="website/src/assets/screen-lyrics.webp" alt="Word-by-word synced lyrics"></td>
   </tr>
   <tr>
@@ -102,7 +102,7 @@ Community-maintained repositories, packaged and updated by their maintainers rat
 
 Both live in the title bar, next to the window controls.
 
-- **Last.fm**: click the Last.fm mark, approve Limusic in the browser tab that
+- **Last.fm**: click the Last.fm mark, approve SRMusic in the browser tab that
   opens, and you're connected for good. Tracks scrobble at the halfway point (or
   four minutes, whichever comes first), which is Last.fm's own rule. Click again
   to see the account or disconnect.
@@ -168,7 +168,7 @@ suggestion.
 
 ## Translations
 
-Limusic is translated on [Weblate](https://hosted.weblate.org/engage/limusic/),
+SRMusic is translated on [Weblate](https://hosted.weblate.org/engage/limusic/),
 who host it free for libre projects.
 
 <a href="https://hosted.weblate.org/engage/limusic/">
@@ -238,22 +238,23 @@ for the full reasoning.
 
 ### Getting your cookie
 
-1. Open **music.youtube.com** in a new tab, signed in, and open DevTools
-   (`F12` or `Cmd+Opt+I`) → the **Network** tab. Leave DevTools open.
-2. Reload the page (`Cmd+R` / `Ctrl+R`) so Network has fresh requests to show.
-3. Click any request to `music.youtube.com` itself in the list — e.g. the
-   first one, usually named `music.youtube.com` or `browse` — **not** a
-   request to a different host like `www.gstatic.com`, `i.ytimg.com`, or a
-   cached static asset (`base.js`, a `.css`/`.png` file). Those don't carry
-   your session cookie, and some show "Provisional headers are shown"
-   instead of the real request headers.
-4. In the panel that opens, go to **Headers** → **Request Headers** (not
+1. While signed in to **music.youtube.com**, open DevTools (`F12` or
+   `Cmd+Opt+I`) → the **Network** tab. Leave DevTools open.
+2. In a new tab, open
+   `music.youtube.com/youtubei/v1/account/account_menu?prettyPrint=false` —
+   this is the exact request SRMusic itself uses to check a cookie actually
+   works, so it's always there and easy to find (filter the Network list by
+   `account_menu` if needed), unlike hunting through everything a full page
+   load fires.
+3. Click that request, then go to **Headers** → **Request Headers** (not
    *Response* Headers) and find the line starting `Cookie:`.
-5. Copy everything after `Cookie: ` (the whole value — it's long, with many
+4. Copy everything after `Cookie: ` (the whole value — it's long, with many
    `name=value;` pairs separated by `;`). That's the string to paste into
-   Limusic's sign-in box (the account menu in the sidebar, web build only).
+   SRMusic's sign-in box — shown automatically if you're not signed in yet,
+   or reachable via Profile → "Add another account" if you already are
+   (web build only either way).
 
-The cookie is a live login credential — treat it like a password. Limusic's
+The cookie is a live login credential — treat it like a password. SRMusic's
 server stores it server-side behind an opaque session cookie of its own
 (never echoed back to the page or logged); paste it directly into the app's
 own sign-in UI, not into a chat, ticket, or anywhere else it would be logged.
@@ -265,7 +266,7 @@ own sign-in UI, not into a chat, ticket, or anywhere else it would be logged.
 - A pure Rust crate speaks YouTube's InnerTube API, impersonating several
   official client identities and falling back between them when one fails.
 - YouTube's stream URLs are protected by obfuscated JavaScript (the signature
-  cipher and the `n` parameter) and by BotGuard attestation. Limusic runs that
+  cipher and the `n` parameter) and by BotGuard attestation. SRMusic runs that
   JavaScript where it expects to run, in a real webview, hidden, and never lets
   any of it touch the UI process.
 - Audio goes through libmpv: gapless transitions, an on-disk cache, and
@@ -289,7 +290,7 @@ own sign-in UI, not into a chat, ticket, or anywhere else it would be logged.
 
 ## Support
 
-Limusic is free and stays free. If it earned a coffee,
+SRMusic is free and stays free. If it earned a coffee,
 [ko-fi.com/simohypers](https://ko-fi.com/simohypers) is where to leave one.
 
 ---

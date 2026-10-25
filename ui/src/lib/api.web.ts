@@ -72,7 +72,16 @@ const noSubscription = (): Promise<UnlistenFn> => Promise.resolve(() => {});
  *  hand back a value) resolves `undefined` rather than failing to parse an empty body as JSON. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	const res = await fetch(`${SERVER_URL}${path}`, { credentials: 'include', ...init });
-	if (!res.ok) throw new Error(`${path} failed: ${res.status}`);
+	if (!res.ok) {
+		// The server's own error text is already a clear, human-readable sentence in most of these
+		// handlers (same convention `web-playback.svelte.ts`'s `resolvePlayback` already followed
+		// alone) — surface it instead of a bare status code. Found via mint-ui-redesign's own
+		// web-signin-gate verification: the cookie endpoint's real validation failure
+		// ("Sign-in didn't complete...", "That session didn't authenticate...") was being discarded
+		// in favor of "/api/auth/cookie failed: 400" here, for every route through this one helper.
+		const text = await res.text().catch(() => '');
+		throw new Error(text || `${path} failed: ${res.status}`);
+	}
 	if (res.status === 204) return undefined as T;
 	return res.json();
 }
@@ -520,3 +529,12 @@ export const onLtState = (cb: (s: LtState) => void): Promise<UnlistenFn> =>
 	Promise.resolve(lt.onState(cb));
 export const onLtNotice = (cb: (msg: string) => void): Promise<UnlistenFn> =>
 	Promise.resolve(lt.onNotice(cb));
+
+// --- offline downloads (mint-ui-redesign, specs/offline-downloads) ---------------------------
+export const downloadTrack = (item: SongItem): Promise<void> => wp.downloadTrack(item);
+export const removeDownload = (videoId: string): Promise<void> => wp.removeDownload(videoId);
+export const isDownloaded = (videoId: string): Promise<boolean> => wp.isDownloaded(videoId);
+export const listDownloaded = (): Promise<
+	{ videoId: string; title: string; artist: string; thumbnail?: string; bytes: number }[]
+> => wp.listDownloaded();
+export const downloadedBytes = (): Promise<number> => wp.downloadedBytes();

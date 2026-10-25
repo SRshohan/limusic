@@ -74,8 +74,8 @@ export default defineConfig(({ mode }) => {
 					// and untested against the desktop build.
 					injectRegister: false,
 					manifest: {
-						name: 'Limusic',
-						short_name: 'Limusic',
+						name: 'SRMusic',
+						short_name: 'SRMusic',
 						description: 'Ad-free music, self-hosted and installable.',
 						start_url: '/',
 						scope: '/',

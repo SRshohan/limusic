@@ -90,6 +90,13 @@ export default defineConfig(({ mode }) => {
 					},
 					workbox: {
 						globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+						// Without this, Workbox has nothing to serve for an offline navigation at all —
+						// `navigateFallbackDenylist` only excludes paths *from* a fallback that has to be
+						// set in the first place. Found testing offline downloads: the SW was precaching
+						// fine, but reloading/relaunching while offline hit the browser's own native
+						// "no internet" page instead of this SPA shell, since nothing told Workbox this is
+						// a single-page app that should fall back to index.html for any other navigation.
+						navigateFallback: '/index.html',
 						// API data is fine to serve stale-while-revalidate; media/video/ws must never be
 						// intercepted by the SW (signed, short-lived, and streaming doesn't fit the cache API).
 						navigateFallbackDenylist: [/^\/media\//, /^\/ws/],

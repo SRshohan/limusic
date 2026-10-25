@@ -398,7 +398,7 @@
 			{inLibraryList}
 			triggerClass="cursor-pointer rounded-md p-1.5 text-muted-foreground hover:bg-accent/20 hover:text-foreground {compact
 				? ''
-				: 'invisible group-focus-within:visible group-hover:visible'}"
+				: 'max-sm:visible invisible group-focus-within:visible group-hover:visible'}"
 		/>
 	</div>
 </div>

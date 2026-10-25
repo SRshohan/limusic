@@ -180,6 +180,6 @@
 	     hovered. At 90% over artwork there is nothing left to blur that you can see. -->
 	<ItemMenu
 		{item}
-		triggerClass="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-background/90 text-foreground opacity-0 shadow-md transition hover:bg-background focus-visible:opacity-100 group-hover:opacity-100 cursor-pointer"
+		triggerClass="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-background/90 text-foreground opacity-0 max-sm:opacity-100 shadow-md transition hover:bg-background focus-visible:opacity-100 group-hover:opacity-100 cursor-pointer"
 	/>
 </div>

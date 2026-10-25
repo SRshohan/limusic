@@ -437,6 +437,12 @@
 			{/if}
 			{@render rows(block.rows, wins[b + 3])}
 		{/each}
+		{#if !view.blocks.length}
+			<!-- A track played directly (no playlist/album, no radio started) leaves nothing after
+			     "Now Playing" — previously just blank space below the current track, easy to mistake
+			     for a rendering bug rather than a genuinely empty queue. -->
+			<p class="px-4 pt-3 pb-2 text-sm text-muted-foreground">{t('player.nothing_queued_next')}</p>
+		{/if}
 	{:else}
 		<p class="p-4 text-sm text-muted-foreground">{t('player.empty_queue')}</p>
 	{/if}

@@ -276,8 +276,13 @@
 	     (signed-in-http-parity task 13.1) plus the transport UI that goes with it. Scope boundary:
 	     AddToPlaylist/NewPlaylistDialog/ShareDialog/ChannelPicker/LinkDialog/CommandPalette/
 	     KeyboardShortcuts/SettingsDialog aren't wired here — out of this task's scope, not audited
-	     yet for Tauri-only calls. -->
-	<div class="relative flex h-screen flex-col text-foreground">
+	     yet for Tauri-only calls.
+	     `h-dvh`, not `h-screen`: mobile Safari/Chrome compute `100vh` against the viewport with the
+	     browser's address-bar chrome fully collapsed, which is taller than what's actually visible
+	     once it's showing — PlayerBar/BottomNav (flex siblings pinned to this container's bottom)
+	     then sit below the fold until the page scrolls, reading as "the player scrolls away" even
+	     though nothing here is meant to scroll but `<main>`. `dvh` tracks the real visible height. -->
+	<div class="relative flex h-dvh flex-col text-foreground">
 		<div class="relative flex min-h-0 flex-1">
 			<Sidebar />
 			<main

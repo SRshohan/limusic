@@ -6,6 +6,7 @@
 		Home01Icon,
 		Search01Icon,
 		LibraryIcon,
+		Download01Icon,
 		Settings01Icon,
 		Sun01Icon,
 		Moon02Icon,
@@ -36,7 +37,8 @@
 	const nav = $derived([
 		{ href: '/', label: t('nav.home'), icon: Home01Icon },
 		{ href: '/search', label: t('nav.search'), icon: Search01Icon },
-		{ href: '/library', label: t('nav.library'), icon: LibraryIcon }
+		{ href: '/library', label: t('nav.library'), icon: LibraryIcon },
+		{ href: '/downloads', label: t('nav.downloads'), icon: Download01Icon }
 	]);
 	const isActive = (href: string) =>
 		href === '/' ? page.url.pathname === '/' : page.url.pathname.startsWith(href);

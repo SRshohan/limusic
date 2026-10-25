@@ -1,7 +1,13 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { HugeiconsIcon } from '@hugeicons/svelte';
-	import { Home01Icon, Search01Icon, LibraryIcon, UserGroup02Icon } from '@hugeicons/core-free-icons';
+	import {
+		Home01Icon,
+		Search01Icon,
+		LibraryIcon,
+		Download01Icon,
+		UserGroup02Icon
+	} from '@hugeicons/core-free-icons';
 	import { t } from '$lib/i18n.svelte';
 	import { np, ui } from '$lib/player.svelte';
 	import { lt } from '$lib/lt.svelte';
@@ -10,10 +16,14 @@
 	// and +layout.svelte). Hidden while the full-screen Now Playing view is open: a tab bar under an
 	// "immersive" view defeats the point of it (#mobile-friendly audit found the old rail staying
 	// visible there even on desktop's narrower treatment).
+	// Downloads was previously reachable only via Home's avatar -> Profile -> Settings -> Downloads
+	// (mint-ui-redesign tasks 3.2/4.2), four taps deep with no path back from most other screens —
+	// promoted to a direct tab here (and in Sidebar.svelte) after that proved too easy to miss.
 	const nav = $derived([
 		{ href: '/', label: t('nav.home'), icon: Home01Icon },
 		{ href: '/search', label: t('nav.search'), icon: Search01Icon },
-		{ href: '/library', label: t('nav.library'), icon: LibraryIcon }
+		{ href: '/library', label: t('nav.library'), icon: LibraryIcon },
+		{ href: '/downloads', label: t('nav.downloads'), icon: Download01Icon }
 	]);
 	const isActive = (href: string) =>
 		href === '/' ? page.url.pathname === '/' : page.url.pathname.startsWith(href);

@@ -10,7 +10,6 @@
 
 pub(crate) mod botguard;
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -66,9 +65,6 @@ pub struct PoTokenGenerator {
     db: Arc<Db>,
     minter: Mutex<Option<Minter>>,
     session_token: Mutex<Option<SessionToken>>,
-    /// Latched once the JS runtime proves unusable — thereafter always degrade to the non-PoToken
-    /// clients.
-    runtime_bad: AtomicBool,
 }
 
 impl PoTokenGenerator {
@@ -81,12 +77,7 @@ impl PoTokenGenerator {
                 "loaded stored PoToken session"
             );
         }
-        PoTokenGenerator {
-            db,
-            minter: Mutex::new(None),
-            session_token: Mutex::new(stored),
-            runtime_bad: AtomicBool::new(false),
-        }
+        PoTokenGenerator { db, minter: Mutex::new(None), session_token: Mutex::new(stored) }
     }
 
     /// Forget the session token, in memory and on disk.
@@ -98,9 +89,6 @@ impl PoTokenGenerator {
     /// Session token for the `/player` request body. Cheap when cached; otherwise performs the
     /// full bootstrap (and leaves the minter warm for streaming-token mints).
     pub async fn get_session_po_token(&self, visitor_data: &str) -> Option<String> {
-        if self.runtime_bad.load(Ordering::SeqCst) {
-            return None;
-        }
         if let Some(token) = self.cached_session_token(visitor_data).await {
             return Some(token);
         }
@@ -125,9 +113,6 @@ impl PoTokenGenerator {
         video_id: &str,
         visitor_data: &str,
     ) -> Option<String> {
-        if self.runtime_bad.load(Ordering::SeqCst) {
-            return None;
-        }
         match timeout(MINT_BUDGET, self.mint_streaming(video_id, visitor_data)).await {
             Ok(Ok(pot)) => Some(pot),
             Ok(Err(e)) => {
@@ -142,11 +127,13 @@ impl PoTokenGenerator {
         }
     }
 
+    /// Every failure here is worth retrying on the next call, `Fatal` included: `crate::v8root`
+    /// transparently respawns its shared thread if it's ever actually gone, so there is no longer a
+    /// "this will never work again this run" condition to latch — a prior permanent `runtime_bad`
+    /// flag was removed because it outlived the assumption it was built on (see v8root's own header
+    /// comment for the incident that exposed this).
     async fn on_failure(&self, what: &str, e: &botguard::Error) {
         tracing::warn!(what, error = %e, "PoToken mint failed — degrading");
-        if matches!(e, botguard::Error::Fatal(_)) {
-            self.runtime_bad.store(true, Ordering::SeqCst);
-        }
         self.teardown().await;
     }
 
@@ -245,9 +232,6 @@ impl PoTokenGenerator {
 
     /// Warm the minter for `visitor_data`. Non-fatal.
     pub async fn prewarm(&self, visitor_data: &str) {
-        if self.runtime_bad.load(Ordering::SeqCst) {
-            return;
-        }
         if self.cached_session_token(visitor_data).await.is_some() {
             tracing::info!("PoToken session token still valid — skipping the BotGuard bootstrap");
             return;

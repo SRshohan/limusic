@@ -110,6 +110,10 @@ pub(crate) enum Cmd {
     /// Thread-identity probe (`crate::v8root`'s own test suite).
     #[cfg(test)]
     Probe(oneshot::Sender<std::thread::ThreadId>),
+    /// Deliberately panics `handle()` (`crate::v8root`'s own test suite) — proves one job's panic
+    /// cannot take the shared v8 thread down with it.
+    #[cfg(test)]
+    Panic,
 }
 
 /// This module's share of the v8 thread's persistent state.
@@ -160,6 +164,8 @@ pub(crate) async fn handle(state: &mut State, cmd: Cmd) {
         Cmd::Probe(reply) => {
             let _ = reply.send(std::thread::current().id());
         }
+        #[cfg(test)]
+        Cmd::Panic => panic!("deliberate test panic"),
     }
 }
 

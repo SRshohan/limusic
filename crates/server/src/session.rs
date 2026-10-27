@@ -162,6 +162,10 @@ pub(crate) fn optional_account(
     account.it.is_logged_in().then_some(account)
 }
 
+/// How long a session cookie lasts before the browser forgets it on its own, independent of
+/// `AccountRegistry`'s own in-memory lifetime (which ends at the next server restart regardless).
+const SESSION_COOKIE_MAX_AGE_SECS: u64 = 30 * 24 * 60 * 60; // 30 days
+
 /// Build the `Set-Cookie` header value for a freshly minted session id.
 pub(crate) fn session_cookie_header(session_id: &str) -> String {
     // `HttpOnly`: never readable from page JS (design.md's "Auth" decision). `SameSite=Lax`: sent
@@ -169,7 +173,13 @@ pub(crate) fn session_cookie_header(session_id: &str) -> String {
     // same-site SPA talking to its own API origin. No `Secure` yet: this is a plain-`http://`
     // localhost dev server, same as the rest of this slice (see http-search-vertical-slice's own
     // Non-Goals on hosting/TLS).
-    format!("{SESSION_COOKIE}={session_id}; HttpOnly; SameSite=Lax; Path=/")
+    // `Max-Age`: without it, this was a browser "session cookie" — discarded between browsing
+    // sessions, which a PWA relaunched from an iOS home-screen icon treats as happening almost
+    // every open, forcing a fresh cookie-paste sign-in each time despite nothing being wrong
+    // server-side. A real expiry is what "stay signed in" actually requires.
+    format!(
+        "{SESSION_COOKIE}={session_id}; HttpOnly; SameSite=Lax; Path=/; Max-Age={SESSION_COOKIE_MAX_AGE_SECS}"
+    )
 }
 
 /// The `Set-Cookie` value that clears the session cookie (sign-out).

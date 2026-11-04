@@ -17,11 +17,10 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 use crate::db::{now_secs, Db};
-use crate::http::WEB_UA;
 
-/// Overall budget for a full bootstrap. Generous because it covers up to `MAX_BOOTSTRAPS` BotGuard
-/// solves (each one a `/Create`, a VM run and a `/GenerateIT`, measured at ~0.8s) while it hunts
-/// for the accepted integrity-token class.
+/// Overall budget for a full bootstrap (one `/Create`, a VM run and a `/GenerateIT`, measured at
+/// ~0.8s) — generous headroom for a slow network rather than anything this single attempt itself
+/// needs (see `botguard.rs`'s header comment for why this is no longer a multi-attempt re-roll).
 const MINT_BUDGET: Duration = Duration::from_secs(60);
 /// Budget for one mint on an already-bootstrapped runtime. Pure JS, no network.
 const CALL_TIMEOUT: Duration = Duration::from_secs(15);
@@ -203,10 +202,9 @@ impl PoTokenGenerator {
         }
     }
 
-    /// Full bootstrap: a BotGuard runtime that landed in the accepted integrity-token class, plus
-    /// the session token it minted on the way.
+    /// Full bootstrap: a fresh BotGuard runtime, plus the session token it minted on the way.
     async fn create_minter(&self, session_id: &str) -> Result<Minter, botguard::Error> {
-        let b = botguard::Minter::spawn(WEB_UA.to_owned(), session_id.to_owned()).await?;
+        let b = botguard::Minter::spawn(session_id.to_owned()).await?;
         let good_for = Duration::from_secs(b.lifetime_secs).saturating_sub(EXPIRY_MARGIN);
         self.store_session_token(session_id, b.session_token, good_for).await;
         Ok(Minter {

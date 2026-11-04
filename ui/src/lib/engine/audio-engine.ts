@@ -46,7 +46,17 @@ export class AudioEngine extends EventTarget {
 	#buildDeck(): Deck {
 		const audio = new Audio();
 		audio.preload = 'auto';
-		audio.crossOrigin = 'anonymous';
+		// `createMediaElementSource` below requires `crossOrigin` to be set at all (else the Web
+		// Audio graph throws), but `'anonymous'` means *no credentials* — even for a same-origin
+		// URL, setting this attribute to anything forces CORS-mode fetching, and "anonymous" means
+		// cookies are omitted. `/media/stream/:id` needs the session cookie to find the right
+		// account's stream registration; without it, every byte-range request Safari issues while
+		// buffering falls back to an anonymous re-resolve of the same video, which is what produced
+		// both the "decoding stalled" failures and the burst of duplicate resolves for one video_id
+		// seen in the server logs. `use-credentials` sends cookies along with the CORS-mode fetch
+		// (same-origin in production; dev's cross-port setup already allows it — see main.rs's
+		// CorsLayer `allow_credentials(true)`).
+		audio.crossOrigin = 'use-credentials';
 		const source = this.#ctx.createMediaElementSource(audio);
 		const gain = this.#ctx.createGain();
 		gain.gain.value = 0;

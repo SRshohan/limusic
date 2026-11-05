@@ -70,6 +70,15 @@ export async function isDownloaded(videoId: string): Promise<boolean> {
 	return !!entry?.pinned;
 }
 
+/** Drop `videoId`'s cached copy, pinned or not — a decode/network error replaying it means the
+ *  stored bytes themselves are bad, which is just as true of a download as of an ordinary
+ *  play-cache hit. The caller (`web-playback.svelte.ts`'s `onTrackFailed`) re-streams from the
+ *  network afterward; a pinned entry quietly stops being "downloaded" until the user downloads it
+ *  again, which is correct — the old download was never really playable. */
+export async function evict(videoId: string): Promise<void> {
+	await (await db()).delete('tracks', videoId);
+}
+
 const inFlight = new Set<string>();
 
 /** Shared by `cacheInBackground` (fire-and-forget) and `ensureCached` (awaited, for an explicit

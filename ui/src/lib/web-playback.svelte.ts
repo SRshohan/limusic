@@ -184,9 +184,10 @@ function getEngine(): AudioEngine {
 		});
 		engine.addEventListener('advanced', () => void onAdvanced());
 		engine.addEventListener('ended', () => void onEndedWithoutPreload());
-		engine.addEventListener('error', (e) =>
-			void onTrackFailed((e as CustomEvent<{ message: string }>).detail?.message)
-		);
+		engine.addEventListener('error', (e) => {
+			const detail = (e as CustomEvent<{ message: string; fromCache: boolean }>).detail;
+			void onTrackFailed(detail?.message, detail?.fromCache);
+		});
 		bindMediaSession(engine, { next: () => void nextTrack(), prev: () => void prevTrack() });
 	}
 	return engine;
@@ -319,13 +320,31 @@ async function onEndedWithoutPreload() {
 	await playCurrent(true);
 }
 
-async function onTrackFailed(message?: string) {
+/** Guards the cache-eviction retry below against looping forever: holds the video_id of a track
+ *  whose cached copy was just evicted and retried over the network. If *that* retry also fails
+ *  (a genuinely broken/unavailable track, not just a bad local cache), the next failure falls
+ *  through to the normal skip-to-next instead of evicting-and-retrying again. */
+let cacheRetriedFor: string | null = null;
+
+async function onTrackFailed(message?: string, fromCache?: boolean) {
 	// This is the `<audio>` element's own `error` event (a decode/network failure once a stream URL
 	// was already loaded) — distinct from `playCurrent`'s try/catch above, which only covers a
 	// failure to *resolve* that URL in the first place. This path had no toast at all: a track that
 	// failed here skipped silently, and with nothing left in the queue the skip was a no-op too — so
 	// playback just went quiet with `playback.paused` still reporting "playing" and no indication
 	// anything had gone wrong (reported as "the queue doesn't work" / "nothing is playing" on iOS).
+	const item = current();
+	// `fromCache`: the failing deck was playing a local yt-cache blob, not a live stream — the
+	// *cached copy itself* is what's bad (incomplete/corrupted), not the resolve/stream pipeline.
+	// Evict it and replay the same track fresh over the network instead of skipping a track that
+	// may well be perfectly fine — reported as "can't play the same song twice" (every play after
+	// the first silently preferred the bad local copy, forever, with no way to clear it).
+	if (fromCache && item && cacheRetriedFor !== item.video_id) {
+		cacheRetriedFor = item.video_id;
+		await ytCache.evict(item.video_id);
+		await playCurrent(true);
+		return;
+	}
 	toast.error(message || 'Playback failed');
 	// Skip a track that failed to resolve/play rather than stall the queue on it.
 	const next = nextIndexFor(currentIndex);

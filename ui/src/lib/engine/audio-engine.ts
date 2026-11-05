@@ -15,7 +15,11 @@ export type EngineEventMap = {
 	advanced: object;
 	/** This deck's media ended with no preloaded successor — nothing to swap to. */
 	ended: object;
-	error: { message: string };
+	/** `fromCache`: this deck was playing a local `blob:` URL (a yt-cache replay) when it failed,
+	 *  not a live `/media/stream/:id` fetch — tells the caller the *cached copy itself* is what's
+	 *  bad, not the network/resolve pipeline, so the fix is evicting it and re-streaming, not
+	 *  skipping the track outright. */
+	error: { message: string; fromCache: boolean };
 };
 
 type Deck = {
@@ -46,16 +50,10 @@ export class AudioEngine extends EventTarget {
 	#buildDeck(): Deck {
 		const audio = new Audio();
 		audio.preload = 'auto';
-		// `createMediaElementSource` below requires `crossOrigin` to be set at all (else the Web
-		// Audio graph throws), but `'anonymous'` means *no credentials* — even for a same-origin
-		// URL, setting this attribute to anything forces CORS-mode fetching, and "anonymous" means
-		// cookies are omitted. `/media/stream/:id` needs the session cookie to find the right
-		// account's stream registration; without it, every byte-range request Safari issues while
-		// buffering falls back to an anonymous re-resolve of the same video, which is what produced
-		// both the "decoding stalled" failures and the burst of duplicate resolves for one video_id
-		// seen in the server logs. `use-credentials` sends cookies along with the CORS-mode fetch
-		// (same-origin in production; dev's cross-port setup already allows it — see main.rs's
-		// CorsLayer `allow_credentials(true)`).
+		// `createMediaElementSource` below requires `crossOrigin` to be set to *something* at
+		// construction time (else the Web Audio graph throws) — the actual value per load is set in
+		// `#applyCrossOrigin` below, right before `src` changes, since it needs to differ by source
+		// (see that method's own comment).
 		audio.crossOrigin = 'use-credentials';
 		const source = this.#ctx.createMediaElementSource(audio);
 		const gain = this.#ctx.createGain();
@@ -82,7 +80,9 @@ export class AudioEngine extends EventTarget {
 		audio.addEventListener('error', () => {
 			if (deck === this.#activeDeck()) {
 				const message = audio.error?.message || 'playback error';
-				this.dispatchEvent(new CustomEvent('error', { detail: { message } }));
+				this.dispatchEvent(
+					new CustomEvent('error', { detail: { message, fromCache: deck.objectUrl !== null } })
+				);
 			}
 		});
 		return deck;
@@ -168,6 +168,16 @@ export class AudioEngine extends EventTarget {
 		idle.gain.gain.value = 0;
 	}
 
+	/** `use-credentials` for a real `/media/stream/:id` network URL (needs the session cookie to
+	 *  find the right account's stream registration — see git history for the decode-stall
+	 *  incident this fixed), `null` for a local `blob:` URL (the yt-cache replay path): a blob is
+	 *  never fetched over the network at all, so CORS/credentials mode means nothing for it, and
+	 *  WebKit has known bugs loading blob URLs on a media element with `crossOrigin` set at all.
+	 *  Must be set before `src` changes — Chrome/Safari both read it at load-start, not per-byte. */
+	#applyCrossOrigin(deck: Deck, isObjectUrl: boolean) {
+		deck.audio.crossOrigin = isObjectUrl ? null : 'use-credentials';
+	}
+
 	/** Loads `url` onto the active deck, replacing whatever is playing, and optionally starts it. */
 	async loadTrack(
 		url: string,
@@ -183,6 +193,7 @@ export class AudioEngine extends EventTarget {
 		this.#releaseDeckUrl(deck);
 		deck.objectUrl = opts.objectUrl ? url : null;
 		deck.preloadedUrl = null;
+		this.#applyCrossOrigin(deck, !!opts.objectUrl);
 		deck.audio.src = url;
 		deck.audio.currentTime = 0;
 		deck.gain.gain.cancelScheduledValues(this.#ctx.currentTime);
@@ -195,6 +206,7 @@ export class AudioEngine extends EventTarget {
 		const idle = this.#idleDeck();
 		this.#releaseDeckUrl(idle);
 		idle.objectUrl = opts.objectUrl ? url : null;
+		this.#applyCrossOrigin(idle, !!opts.objectUrl);
 		idle.audio.src = url;
 		idle.audio.currentTime = 0;
 		idle.gain.gain.cancelScheduledValues(this.#ctx.currentTime);
